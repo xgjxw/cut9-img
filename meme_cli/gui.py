@@ -7,6 +7,8 @@ import sys
 import tempfile
 import threading
 import time
+import re
+import shutil
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -485,11 +487,54 @@ class MemeGui(BaseTk):
             row.pack(fill="x", pady=(0, 8))
             meta = tk.Frame(row, bg="#FBFBFC")
             meta.pack(side="left", fill="x", expand=True)
-            tk.Label(meta, text=path.name, bg="#FBFBFC", fg=TEXT, font=("Microsoft YaHei UI", 10, "bold")).pack(anchor="w")
-            count = len([p for p in path.iterdir() if p.is_file() and p.suffix.lower() in {".gif", ".png"} and p.name != "preview_boxes.png"])
-            mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(path.stat().st_mtime))
-            tk.Label(meta, text=f"{count} 张图片 · {mtime}", bg="#FBFBFC", fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(3, 0))
-            self._small_button(row, "打开", lambda p=path: self._open_dir(str(p)), bg=MINT).pack(side="right")
+            info = self._describe_output_dir(path)
+            tk.Label(meta, text=info["display"], bg="#FBFBFC", fg=TEXT, font=("Microsoft YaHei UI", 10, "bold")).pack(anchor="w")
+            tk.Label(meta, text=info["detail"], bg="#FBFBFC", fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(3, 0))
+            actions = tk.Frame(row, bg="#FBFBFC")
+            actions.pack(side="right")
+            self._small_button(actions, "打开", lambda p=path: self._open_dir(str(p)), bg=MINT).pack(side="left", padx=(0, 8))
+            self._small_button(actions, "删除", lambda p=path: self._delete_output_dir(p), bg=PINK_SOFT).pack(side="left")
+
+    def _describe_output_dir(self, path: Path) -> dict[str, str]:
+        name = path.name
+        count = len([p for p in path.iterdir() if p.is_file() and p.suffix.lower() in {".gif", ".png"} and p.name != "preview_boxes.png"])
+        kind = "切图" if "_split_" in name else "制作" if "_gif_" in name or "_convert_" in name else "输出"
+        stamp_match = re.search(r"(20\d{6}-\d{6})", name)
+        if stamp_match:
+            raw = stamp_match.group(1)
+            nice_time = f"{raw[0:4]}-{raw[4:6]}-{raw[6:8]} {raw[9:11]}:{raw[11:13]}"
+        else:
+            nice_time = time.strftime("%Y-%m-%d %H:%M", time.localtime(path.stat().st_mtime))
+        token = self._extract_output_token(name, kind)
+        display = f"{kind}-{nice_time}-{count}张-{token}"
+        return {
+            "display": display,
+            "detail": path.name,
+        }
+
+    def _extract_output_token(self, name: str, kind: str) -> str:
+        marker = "_split_" if kind == "切图" else "_gif_" if "_gif_" in name else "_convert_"
+        token = name.split(marker, 1)[0] if marker in name else name
+        token = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_-]+", "", token).strip("_-")
+        if not token:
+            return "gogogo"
+        if len(token) > 18:
+            token = f"{token[:8]}…{token[-6:]}"
+        return token
+
+    def _delete_output_dir(self, path: Path) -> None:
+        root = self._output_root().resolve()
+        target = path.resolve()
+        if root not in target.parents:
+            messagebox.showerror("删除失败", "目标目录不在输出根目录内。")
+            return
+        if not target.exists() or not target.is_dir():
+            self._refresh_output_dirs()
+            return
+        if not messagebox.askyesno("确认删除", f"确定删除这个输出目录吗？\n\n{target.name}"):
+            return
+        shutil.rmtree(target)
+        self._refresh_output_dirs()
 
     def _option_panel(self, parent: tk.Frame, title: str, subtitle: str, *, bg: str) -> tk.Frame:
         outer = tk.Frame(parent, bg=bg, highlightthickness=1, highlightbackground=bg, bd=0)
