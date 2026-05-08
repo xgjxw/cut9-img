@@ -168,6 +168,7 @@ class MemeGui(BaseTk):
         self._open_result_buttons: dict[str, tk.Button] = {}
         self._output_list_body: tk.Frame | None = None
         self._output_canvas: tk.Canvas | None = None
+        self._grid_buttons: list[tuple[tk.Button, int, int]] = []
 
         self.convert_vars = {
             "input": tk.StringVar(),
@@ -422,9 +423,10 @@ class MemeGui(BaseTk):
         tk.Label(grid, text="宫格", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w")
         grid_row = tk.Frame(grid, bg=CARD)
         grid_row.pack(anchor="w", pady=(8, 16))
-        self._small_button(grid_row, "3 x 3", lambda: self._set_grid_preset(3, 3), bg=PINK_SOFT).pack(side="left", padx=(0, 8))
-        self._small_button(grid_row, "4 x 4", lambda: self._set_grid_preset(4, 4), bg=SIDEBAR_BG).pack(side="left", padx=(0, 8))
-        self._small_button(grid_row, "5 x 5", lambda: self._set_grid_preset(5, 5), bg=SIDEBAR_BG).pack(side="left")
+        self._build_grid_button(grid_row, "3 x 3", 3, 3).pack(side="left", padx=(0, 8))
+        self._build_grid_button(grid_row, "4 x 4", 4, 4).pack(side="left", padx=(0, 8))
+        self._build_grid_button(grid_row, "5 x 5", 5, 5).pack(side="left")
+        self._refresh_grid_buttons()
 
         tk.Label(grid, text="格式", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w")
         self._chip_group(grid, self.split_vars["format"], [("GIF", "gif"), ("PNG", "png")]).pack(anchor="w", pady=(8, 16))
@@ -479,6 +481,32 @@ class MemeGui(BaseTk):
             self._status_label = status
             self._open_result_button = open_button
 
+    def _build_grid_button(self, parent: tk.Misc, text: str, rows: int, cols: int) -> tk.Button:
+        button = tk.Button(
+            parent,
+            text=text,
+            command=lambda: self._set_grid_preset(rows, cols),
+            bg=CARD,
+            fg=TEXT,
+            activebackground=PINK,
+            activeforeground=TEXT,
+            relief="flat",
+            bd=0,
+            padx=16,
+            pady=8,
+            font=("Microsoft YaHei UI", 10, "bold"),
+            cursor="hand2",
+        )
+        self._grid_buttons.append((button, rows, cols))
+        return button
+
+    def _refresh_grid_buttons(self) -> None:
+        rows = int(self.split_vars["rows"].get() or "3")
+        cols = int(self.split_vars["cols"].get() or "3")
+        for button, b_rows, b_cols in self._grid_buttons:
+            selected = rows == b_rows and cols == b_cols
+            button.configure(bg=PINK if selected else CARD, activebackground=PINK if selected else PINK_SOFT)
+
     def _build_action_footer(self, parent: tk.Frame) -> tk.Frame:
         wrap = tk.Frame(parent, bg=BG)
         self._start_button = tk.Button(
@@ -511,12 +539,23 @@ class MemeGui(BaseTk):
         head = tk.Frame(body, bg=CARD)
         head.pack(fill="x")
         tk.Label(head, text="输出目录", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 16, "bold")).pack(side="left")
+        self._small_button(head, "批量删除", self._delete_all_output_dirs, bg=PINK_SOFT).pack(side="right", padx=(8, 0))
         self._small_button(head, "刷新", self._refresh_output_dirs, bg=PINK_SOFT).pack(side="right")
         tk.Label(body, text="这里会列出最近自动生成的结果目录，点击即可打开。", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(8, 16))
         list_wrap = tk.Frame(body, bg=CARD)
         list_wrap.pack(fill="both", expand=True)
         self._output_canvas = tk.Canvas(list_wrap, bg=CARD, highlightthickness=0, bd=0)
-        scrollbar = tk.Scrollbar(list_wrap, orient="vertical", command=self._output_canvas.yview)
+        scrollbar = tk.Scrollbar(
+            list_wrap,
+            orient="vertical",
+            command=self._output_canvas.yview,
+            bg=PINK_SOFT,
+            troughcolor="#FAF7FA",
+            activebackground=PINK,
+            relief="flat",
+            bd=0,
+            width=12,
+        )
         self._output_canvas.configure(yscrollcommand=scrollbar.set)
         self._output_canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -599,6 +638,18 @@ class MemeGui(BaseTk):
         if not messagebox.askyesno("确认删除", f"确定删除这个输出目录吗？\n\n{target.name}"):
             return
         shutil.rmtree(target)
+        self._refresh_output_dirs()
+
+    def _delete_all_output_dirs(self) -> None:
+        root = self._output_root()
+        dirs = [p for p in root.iterdir() if p.is_dir()] if root.exists() else []
+        if not dirs:
+            self._refresh_output_dirs()
+            return
+        if not messagebox.askyesno("批量删除", f"确定删除全部 {len(dirs)} 个输出目录吗？"):
+            return
+        for path in dirs:
+            shutil.rmtree(path)
         self._refresh_output_dirs()
 
     def _option_panel(self, parent: tk.Frame, title: str, subtitle: str, *, bg: str) -> tk.Frame:
@@ -981,6 +1032,7 @@ class MemeGui(BaseTk):
     def _set_grid_preset(self, rows: int, cols: int) -> None:
         self.split_vars["rows"].set(str(rows))
         self.split_vars["cols"].set(str(cols))
+        self._refresh_grid_buttons()
         current = self.split_vars["input"].get().strip()
         if current:
             self._update_preview("split", Path(current))
