@@ -14,7 +14,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
-from PIL import Image, ImageGrab, ImageTk
+from PIL import Image, ImageDraw, ImageGrab, ImageTk
 
 from . import __version__
 from .cli import SUPPORTED_EXTS, parse_max_bytes, parse_size, run_convert, run_split_sheet
@@ -97,18 +97,21 @@ class MemeGui(BaseTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("九宫格切图器")
-        self.geometry("1160x820")
-        self.minsize(1040, 740)
+        self.geometry("760x820")
+        self.minsize(680, 760)
         self.configure(bg=BG)
 
         self._running = False
-        self._mode = "convert"
+        self._mode = "split"
         self._toast_reset = None
         self._preview_refs: dict[str, ImageTk.PhotoImage] = {}
         self._input_views: dict[str, dict[str, tk.Widget]] = {}
         self._log_widgets: list[ScrolledText] = []
         self._last_output_file: Path | None = None
         self._nav_buttons: dict[str, tk.Button] = {}
+        self._start_button: tk.Button | None = None
+        self._open_result_button: tk.Button | None = None
+        self._status_label: tk.Label | None = None
 
         self.convert_vars = {
             "input": tk.StringVar(),
@@ -140,7 +143,7 @@ class MemeGui(BaseTk):
         self._setup_icon()
         self._setup_style()
         self._build_ui()
-        self._switch_mode("convert")
+        self._switch_mode("split")
         self.bind_all("<Control-v>", self._handle_global_paste, add=True)
 
     def _setup_icon(self) -> None:
@@ -159,7 +162,6 @@ class MemeGui(BaseTk):
     def _build_ui(self) -> None:
         root = tk.Frame(self, bg=BG)
         root.pack(fill="both", expand=True)
-        self._build_sidebar(root)
         self._build_main(root)
 
     def _build_sidebar(self, root: tk.Frame) -> None:
@@ -195,39 +197,23 @@ class MemeGui(BaseTk):
         tk.Label(meta, text="本地模式", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 8)).pack(anchor="w")
 
     def _build_main(self, root: tk.Frame) -> None:
-        main = tk.Frame(root, bg=BG, padx=28, pady=22)
-        main.pack(side="left", fill="both", expand=True)
+        main = tk.Frame(root, bg=BG, padx=34, pady=20)
+        main.pack(fill="both", expand=True)
         self.main = main
 
-        header = tk.Frame(main, bg=BG)
-        header.pack(fill="x", pady=(0, 18))
-        title_box = tk.Frame(header, bg=BG)
-        title_box.pack(side="left", fill="x", expand=True)
-        self._hero_title = tk.Label(title_box, text="", bg=BG, fg=TEXT, font=("Microsoft YaHei UI", 22, "bold"))
-        self._hero_title.pack(anchor="w")
-        self._hero_sub = tk.Label(title_box, text="", bg=BG, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 10))
-        self._hero_sub.pack(anchor="w", pady=(5, 0))
+        self._hero_title = tk.Label(main, text="九宫格切图器", bg=BG, fg=TEXT, font=("Microsoft YaHei UI", 24, "bold"))
+        self._hero_title.pack()
+        self._hero_sub = tk.Label(main, text="拖入拼图或粘贴图片，选宫格，点开始。结果会自动打开。", bg=BG, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 10))
+        self._hero_sub.pack(pady=(6, 12))
 
-        self._toast_outer, toast_body = make_card(header, bg=PILL_BG, border=PILL_BG, padx=18, pady=10)
-        self._toast_outer.pack(side="right", anchor="ne")
+        self._toast_outer, toast_body = make_card(main, bg=PILL_BG, border=PILL_BG, padx=18, pady=9)
+        self._toast_outer.pack(pady=(0, 12))
         self._toast_label = tk.Label(toast_body, text="", bg=PILL_BG, fg=GREEN_TEXT, font=("Microsoft YaHei UI", 10, "bold"))
         self._toast_label.pack()
 
-        scroll_wrap = tk.Frame(main, bg=BG)
-        scroll_wrap.pack(fill="both", expand=True)
-        self.page_canvas = tk.Canvas(scroll_wrap, bg=BG, highlightthickness=0, bd=0)
-        page_scroll = tk.Scrollbar(scroll_wrap, orient="vertical", command=self.page_canvas.yview)
-        self.page_canvas.configure(yscrollcommand=page_scroll.set)
-        self.page_canvas.pack(side="left", fill="both", expand=True)
-        self.page_host = tk.Frame(self.page_canvas, bg=BG)
-        self._page_window = self.page_canvas.create_window((0, 0), window=self.page_host, anchor="nw")
-        self.page_host.bind("<Configure>", lambda _event: self.page_canvas.configure(scrollregion=self.page_canvas.bbox("all")))
-        self.page_canvas.bind("<Configure>", lambda event: self.page_canvas.itemconfigure(self._page_window, width=event.width))
-        self.page_canvas.bind_all("<MouseWheel>", self._on_mousewheel, add=True)
-        self.pages = {
-            "convert": self._build_convert_page(),
-            "split": self._build_split_page(),
-        }
+        self.page_host = tk.Frame(main, bg=BG)
+        self.page_host.pack(fill="both", expand=True)
+        self.pages = {"split": self._build_split_page()}
 
     def _build_convert_page(self) -> tk.Frame:
         page = tk.Frame(self.page_host, bg=BG)
@@ -238,25 +224,23 @@ class MemeGui(BaseTk):
             subtitle="拖图、粘贴、点选，把图片变成更适合发送的格式",
             allow_dir=False,
             browse_text="选择图片",
-            action_text="开始转换",
-            action_command=self.start_convert,
         ).pack(fill="x", pady=(0, 14))
         self._build_convert_options(page).pack(fill="x")
         return page
 
     def _build_split_page(self) -> tk.Frame:
         page = tk.Frame(self.page_host, bg=BG)
+        page.grid_columnconfigure(0, weight=1)
+        page.grid_columnconfigure(1, weight=1)
         self._build_drop_zone(
             page,
             mode="split",
-            title="导入拼图",
+            title="放入拼图",
             subtitle="拖入拼图或粘贴图片",
             allow_dir=False,
             browse_text="选择拼图",
-            action_text="开始切图",
-            action_command=self.start_split,
-        ).pack(fill="x", pady=(0, 14))
-        self._build_split_options(page).pack(fill="x")
+        ).grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        self._build_split_options(page).grid(row=0, column=1, sticky="nsew", padx=(10, 0))
         return page
 
     def _build_drop_zone(
@@ -268,28 +252,25 @@ class MemeGui(BaseTk):
         subtitle: str,
         allow_dir: bool,
         browse_text: str,
-        action_text: str,
-        action_command,
     ) -> tk.Frame:
-        wrap = tk.Frame(parent, bg=CARD, highlightthickness=1, highlightbackground=LINE, padx=24, pady=22)
+        wrap = tk.Frame(parent, bg=CARD, highlightthickness=1, highlightbackground=LINE, padx=24, pady=16)
         wrap.grid_columnconfigure(0, weight=1)
 
-        tk.Label(wrap, text=title, bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 18, "bold")).grid(row=0, column=0, pady=(0, 14))
+        tk.Label(wrap, text=title, bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 16, "bold")).grid(row=0, column=0, pady=(0, 10))
 
-        preview_shell = tk.Frame(wrap, bg="#FAFAFC", highlightthickness=1, highlightbackground=LINE, width=190, height=190)
+        preview_shell = tk.Frame(wrap, bg="#FAFAFC", highlightthickness=1, highlightbackground=LINE, width=250, height=250)
         preview_shell.grid(row=1, column=0)
         preview_shell.pack_propagate(False)
-        preview = tk.Label(preview_shell, bg="#FAFAFC", fg=TEXT_SOFT, text="点击选择图片\n或拖拽 / Ctrl+V 粘贴", justify="center", font=("Microsoft YaHei UI", 11))
+        preview = tk.Label(preview_shell, bg="#FAFAFC", fg=TEXT_SOFT, text="点击选择图片\n或拖拽 / Ctrl+V 粘贴", justify="center", font=("Microsoft YaHei UI", 12))
         preview.pack(fill="both", expand=True)
 
-        hint = "支持拖拽" if DND_READY else "当前环境不支持系统拖拽，可用 Ctrl+V"
-        info = tk.Label(wrap, bg=CARD, fg=TEXT_SOFT, text=hint, justify="center", font=("Microsoft YaHei UI", 9), wraplength=420)
+        hint = "支持拖拽和 Ctrl+V 粘贴" if DND_READY else "可用 Ctrl+V 粘贴，或点击选择图片"
+        info = tk.Label(wrap, bg=CARD, fg=TEXT_SOFT, text=hint, justify="center", font=("Microsoft YaHei UI", 9), wraplength=520)
         info.grid(row=2, column=0, pady=(8, 0))
 
         action = tk.Frame(wrap, bg=CARD)
-        action.grid(row=3, column=0, pady=(12, 0))
-        self._small_button(action, browse_text, lambda: self._choose_input_file(mode), bg=PINK_SOFT).pack(side="left", padx=(0, 10))
-        self._small_button(action, action_text, action_command, bg=GREEN).pack(side="left")
+        action.grid(row=3, column=0, pady=(10, 0))
+        self._small_button(action, browse_text, lambda: self._choose_input_file(mode), bg=PINK_SOFT).pack()
 
         self._input_views[mode] = {"preview": preview, "info": info}
         preview_shell.bind("<Button-1>", lambda _event: self._choose_input_file(mode))
@@ -364,40 +345,85 @@ class MemeGui(BaseTk):
         return row
 
     def _build_split_options(self, parent: tk.Frame) -> tk.Frame:
-        row = tk.Frame(parent, bg=BG)
-        row.grid_columnconfigure(0, weight=1, uniform="split")
-        row.grid_columnconfigure(1, weight=1, uniform="split")
+        outer, body = make_card(parent, bg=CARD, border=LINE, padx=24, pady=14)
 
-        left = self._option_panel(row, "网格设置", "行列 / 输出格式", bg=PINK_SOFT)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        preset = tk.Frame(left.inner, bg=PINK_SOFT)
-        preset.pack(anchor="w", pady=(14, 0))
-        self._small_button(preset, "3 x 3", lambda: self._set_grid_preset(3, 3), bg=CARD).pack(side="left", padx=(0, 8))
-        self._small_button(preset, "4 x 4", lambda: self._set_grid_preset(4, 4), bg=CARD).pack(side="left", padx=(0, 8))
-        self._small_button(preset, "5 x 5", lambda: self._set_grid_preset(5, 5), bg=CARD).pack(side="left")
-        rc = tk.Frame(left.inner, bg=PINK_SOFT)
-        rc.pack(anchor="w", pady=(14, 0))
-        tk.Label(rc, text="行", bg=PINK_SOFT, fg=TEXT, font=("Microsoft YaHei UI", 10)).pack(side="left")
-        tk.Spinbox(rc, from_=1, to=12, textvariable=self.split_vars["rows"], width=4).pack(side="left", padx=(6, 16))
-        tk.Label(rc, text="列", bg=PINK_SOFT, fg=TEXT, font=("Microsoft YaHei UI", 10)).pack(side="left")
-        tk.Spinbox(rc, from_=1, to=12, textvariable=self.split_vars["cols"], width=4).pack(side="left", padx=(6, 0))
-        tk.Label(left.inner, text="输出格式", bg=PINK_SOFT, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(14, 6))
-        self._chip_group(left.inner, self.split_vars["format"], [("GIF", "gif"), ("PNG", "png")]).pack(anchor="w")
+        grid = tk.Frame(body, bg=CARD)
+        grid.pack(fill="x")
 
-        right = self._option_panel(row, "输出尺寸", "大小 / 背景", bg=YELLOW_SOFT)
-        right.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
-        self._chip_group(right.inner, self.split_vars["size"], [("原图", "raw"), ("小", "160"), ("中", "200"), ("大", "240")]).pack(anchor="w", pady=(14, 0))
-        tk.Checkbutton(
-            right.inner,
+        tk.Label(grid, text="宫格", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w")
+        grid_row = tk.Frame(grid, bg=CARD)
+        grid_row.pack(anchor="w", pady=(8, 16))
+        self._small_button(grid_row, "3 x 3", lambda: self._set_grid_preset(3, 3), bg=PINK_SOFT).pack(side="left", padx=(0, 8))
+        self._small_button(grid_row, "4 x 4", lambda: self._set_grid_preset(4, 4), bg=SIDEBAR_BG).pack(side="left", padx=(0, 8))
+        self._small_button(grid_row, "5 x 5", lambda: self._set_grid_preset(5, 5), bg=SIDEBAR_BG).pack(side="left")
+
+        tk.Label(grid, text="格式", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w")
+        self._chip_group(grid, self.split_vars["format"], [("GIF", "gif"), ("PNG", "png")]).pack(anchor="w", pady=(8, 16))
+
+        tk.Label(grid, text="尺寸", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w")
+        self._chip_group(grid, self.split_vars["size"], [("原图", "raw"), ("200px", "200"), ("240px", "240")]).pack(anchor="w", pady=(8, 10))
+
+        transparent = tk.Checkbutton(
+            body,
             text="背景转透明",
             variable=self.split_vars["transparent_bg"],
-            bg=YELLOW_SOFT,
+            bg=CARD,
             fg=TEXT,
-            activebackground=YELLOW_SOFT,
-            selectcolor=YELLOW_SOFT,
+            activebackground=CARD,
+            selectcolor=CARD,
             font=("Microsoft YaHei UI", 10),
-        ).pack(anchor="w", pady=(16, 0))
-        return row
+        )
+        transparent.pack(anchor="w", pady=(0, 8))
+
+        action = tk.Frame(body, bg=CARD)
+        action.pack(fill="x", pady=(14, 0))
+        self._start_button = tk.Button(
+            action,
+            text="请先选择拼图",
+            command=self.start_split,
+            bg="#E8E3E8",
+            fg=TEXT_SOFT,
+            disabledforeground=TEXT_SOFT,
+            activebackground=GREEN,
+            activeforeground=GREEN_TEXT,
+            relief="flat",
+            bd=0,
+            padx=68,
+            pady=13,
+            font=("Microsoft YaHei UI", 15, "bold"),
+            cursor="arrow",
+            state="disabled",
+        )
+        self._start_button.pack()
+        self._status_label = tk.Label(action, text="完成后自动打开结果目录", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9))
+        self._status_label.pack(pady=(10, 0))
+        self._open_result_button = self._small_button(action, "再次打开结果目录", lambda: self._open_dir(self.split_vars["output"].get()), bg=SIDEBAR_BG)
+        return outer
+
+    def _build_action_footer(self, parent: tk.Frame) -> tk.Frame:
+        wrap = tk.Frame(parent, bg=BG)
+        self._start_button = tk.Button(
+            wrap,
+            text="请先选择拼图",
+            command=self.start_split,
+            bg="#E8E3E8",
+            fg=TEXT_SOFT,
+            disabledforeground=TEXT_SOFT,
+            activebackground=GREEN,
+            activeforeground=GREEN_TEXT,
+            relief="flat",
+            bd=0,
+            padx=68,
+            pady=14,
+            font=("Microsoft YaHei UI", 15, "bold"),
+            cursor="hand2",
+            state="disabled",
+        )
+        self._start_button.pack()
+        self._status_label = tk.Label(wrap, text="完成后自动打开结果目录", bg=BG, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9))
+        self._status_label.pack(pady=(12, 0))
+        self._open_result_button = self._small_button(wrap, "再次打开结果目录", lambda: self._open_dir(self.split_vars["output"].get()), bg=SIDEBAR_BG)
+        return wrap
 
     def _option_panel(self, parent: tk.Frame, title: str, subtitle: str, *, bg: str) -> tk.Frame:
         outer = tk.Frame(parent, bg=bg, highlightthickness=1, highlightbackground=bg, bd=0)
@@ -529,8 +555,8 @@ class MemeGui(BaseTk):
                 activeforeground=TEXT,
                 relief="flat",
                 bd=0,
-                padx=18,
-                pady=10,
+                padx=16,
+                pady=8,
                 font=("Microsoft YaHei UI", 10, "bold"),
                 command=lambda selected=value: variable.set(selected),
                 cursor="hand2",
@@ -548,32 +574,17 @@ class MemeGui(BaseTk):
         return self.convert_vars if mode == "convert" else self.split_vars
 
     def _on_mousewheel(self, event) -> None:
-        if getattr(event, "delta", 0):
+        if hasattr(self, "page_canvas") and getattr(event, "delta", 0):
             self.page_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _switch_mode(self, mode: str) -> None:
-        self._mode = mode
+        self._mode = "split"
         for key, frame in self.pages.items():
-            if key == mode:
+            if key == "split":
                 frame.pack(fill="both", expand=True)
             else:
                 frame.pack_forget()
-        for key, button in self._nav_buttons.items():
-            if key == mode:
-                button.configure(bg=PINK, fg=TEXT)
-            elif key in {"open", "clear"}:
-                button.configure(bg=SIDEBAR_BG, fg=TEXT)
-            else:
-                button.configure(bg=SIDEBAR_BG, fg=TEXT)
-        if mode == "convert":
-            self._hero_title.configure(text="开始施展魔法！")
-            self._hero_sub.configure(text="拖图、压缩、导出，把图片变成更适合发送的格式")
-            self._set_toast("已准备好，可以开始批量转换。")
-        else:
-            self._hero_title.configure(text="开始切图吧！")
-            self._hero_sub.configure(text="导入拼图、识别网格、切开单图，适合做微信表情包")
-            self._set_toast("切图模式已就绪，推荐先用 3 x 3 或 4 x 4。")
-        self.after_idle(lambda: self.page_canvas.configure(scrollregion=self.page_canvas.bbox("all")))
+        self._set_toast("准备好了，选择或粘贴一张拼图即可开始。")
 
     def _set_toast(self, text: str) -> None:
         self._toast_label.configure(text=text)
@@ -654,16 +665,29 @@ class MemeGui(BaseTk):
         view = self._input_views.get(mode)
         if view:
             view["preview"].configure(image="", text="点击选择图片\n或拖拽 / Ctrl+V 粘贴")
-            hint = "支持拖拽" if DND_READY else "当前环境不支持系统拖拽，可用 Ctrl+V"
+            hint = "支持拖拽和 Ctrl+V 粘贴" if DND_READY else "可用 Ctrl+V 粘贴，或点击选择图片"
             view["info"].configure(text=hint)
         self._preview_refs.pop(mode, None)
-        self._flash_toast("已清空当前状态，可以重新导入图片。")
+        if self._start_button is not None:
+            self._start_button.configure(text="请先选择拼图", state="disabled", bg="#E8E3E8", fg=TEXT_SOFT, cursor="arrow")
+        if self._status_label is not None:
+            self._status_label.configure(text="完成后自动打开结果目录", fg=TEXT_SOFT)
+        if self._open_result_button is not None:
+            self._open_result_button.pack_forget()
+        self._flash_toast("已清空，可以重新导入拼图。")
 
     def _set_input(self, mode: str, path: Path) -> None:
         vars_map = self._vars(mode)
         vars_map["input"].set(str(path))
         vars_map["output"].set(str(self._suggest_output(mode, path)))
         self._update_preview(mode, path)
+        if mode == "split" and self._start_button is not None:
+            self._start_button.configure(text="开始切图", state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
+        if self._status_label is not None:
+            rows, cols = self.split_vars["rows"].get(), self.split_vars["cols"].get()
+            self._status_label.configure(text=f"将按 {rows} x {cols} 切图，完成后自动打开结果目录", fg=TEXT_SOFT)
+        if self._open_result_button is not None:
+            self._open_result_button.pack_forget()
 
     def _suggest_output(self, mode: str, path: Path) -> Path:
         stem = path.name if path.is_dir() else path.stem
@@ -685,8 +709,7 @@ class MemeGui(BaseTk):
 
         try:
             with Image.open(path) as image:
-                thumb = image.convert("RGBA")
-                thumb.thumbnail((148, 148), Image.Resampling.LANCZOS)
+                thumb = self._make_preview_image(image, mode)
                 frames = getattr(image, "n_frames", 1)
                 width, height = image.size
         except Exception as exc:
@@ -697,8 +720,24 @@ class MemeGui(BaseTk):
 
         photo = ImageTk.PhotoImage(thumb)
         preview.configure(image=photo, text="")
-        info.configure(text=f"{path.name} · {width} x {height} · {frames} 帧")
+        info.configure(text=f"{width} x {height} · {frames} 帧")
         self._preview_refs[mode] = photo
+
+    def _make_preview_image(self, image: Image.Image, mode: str) -> Image.Image:
+        thumb = image.convert("RGBA")
+        thumb.thumbnail((236, 236), Image.Resampling.LANCZOS)
+        if mode != "split":
+            return thumb
+        rows = max(1, int(self.split_vars["rows"].get() or "3"))
+        cols = max(1, int(self.split_vars["cols"].get() or "3"))
+        draw = ImageDraw.Draw(thumb)
+        for step in range(1, cols):
+            x = round(thumb.width * step / cols)
+            draw.line([(x, 0), (x, thumb.height)], fill=(245, 168, 193, 230), width=2)
+        for step in range(1, rows):
+            y = round(thumb.height * step / rows)
+            draw.line([(0, y), (thumb.width, y)], fill=(245, 168, 193, 230), width=2)
+        return thumb
 
     def _handle_global_paste(self, _event) -> str | None:
         if self._paste_clipboard(self._mode, False):
@@ -755,6 +794,11 @@ class MemeGui(BaseTk):
     def _set_grid_preset(self, rows: int, cols: int) -> None:
         self.split_vars["rows"].set(str(rows))
         self.split_vars["cols"].set(str(cols))
+        current = self.split_vars["input"].get().strip()
+        if current:
+            self._update_preview("split", Path(current))
+        if self._status_label is not None:
+            self._status_label.configure(text=f"将按 {rows} x {cols} 切图，完成后自动打开结果目录")
         self._flash_toast(f"已切换为 {rows} x {cols} 网格。")
 
     def _open_dir(self, value: str) -> None:
@@ -813,6 +857,10 @@ class MemeGui(BaseTk):
         self._running = True
         self._append_log(f"== {title} ==")
         self._flash_toast(f"{title} 已开始执行……", reset=False)
+        if self._start_button is not None:
+            self._start_button.configure(text="正在切图…", state="disabled", bg="#E8E3E8", fg=TEXT_SOFT, cursor="arrow")
+        if self._status_label is not None:
+            self._status_label.configure(text="正在处理，请稍等。", fg=TEXT_SOFT)
 
         def worker() -> None:
             buf = io.StringIO()
@@ -827,12 +875,15 @@ class MemeGui(BaseTk):
                     out_dir = Path(args.output).expanduser().resolve()
                     self.after(0, lambda: self._update_recent_output(out_dir))
                     self.after(0, lambda: self._open_dir(str(out_dir)))
+                    self.after(0, lambda: self._show_success(out_dir))
                     self.after(0, lambda: self._flash_toast(f"{title} 已完成。"))
                 else:
                     self.after(0, lambda: self._flash_toast(f"{title} 已结束，返回 code={code}。"))
+                    self.after(0, lambda: self._restore_start_button("切图失败，再试一次"))
             except Exception:
                 self.after(0, lambda: self._append_log(traceback.format_exc()))
-                self.after(0, lambda: self._flash_toast("任务失败，请查看日志。", reset=False))
+                self.after(0, lambda: self._flash_toast("任务失败，请重新选择图片。", reset=False))
+                self.after(0, lambda: self._restore_start_button("切图失败，再试一次"))
             finally:
                 self.after(0, self._clear_running)
 
@@ -840,6 +891,21 @@ class MemeGui(BaseTk):
 
     def _clear_running(self) -> None:
         self._running = False
+
+    def _restore_start_button(self, text: str = "开始切图") -> None:
+        if self._start_button is not None:
+            self._start_button.configure(text=text, state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
+        if self._status_label is not None:
+            self._status_label.configure(text="完成后自动打开结果目录", fg=TEXT_SOFT)
+
+    def _show_success(self, output_dir: Path) -> None:
+        count = len([p for p in output_dir.iterdir() if p.is_file() and p.suffix.lower() in {".gif", ".png"} and p.name != "preview_boxes.png"])
+        if self._start_button is not None:
+            self._start_button.configure(text="继续切图", state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
+        if self._status_label is not None:
+            self._status_label.configure(text=f"已切出 {count} 张图片，结果目录已打开。", fg=GREEN_TEXT)
+        if self._open_result_button is not None:
+            self._open_result_button.pack(pady=(10, 0))
 
     def start_convert(self) -> None:
         try:
