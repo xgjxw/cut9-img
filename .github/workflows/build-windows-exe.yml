@@ -6,6 +6,9 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build 九宫格切图器.exe
@@ -51,3 +54,20 @@ jobs:
           name: cut9-img-windows-exe
           path: dist/*.exe
           if-no-files-found: error
+
+      - name: Publish latest release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $exe = Get-ChildItem -LiteralPath .\dist -Filter *.exe | Select-Object -First 1
+          if (-not $exe) {
+            throw "EXE not found"
+          }
+
+          gh release view latest *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload latest $exe.FullName --clobber
+          } else {
+            gh release create latest $exe.FullName --title "Latest Windows EXE" --notes "自动构建的最新版 Windows 可执行文件。"
+          }
