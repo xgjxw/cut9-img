@@ -95,6 +95,55 @@ class TogglePanel(tk.Frame):
             self.card.pack_forget()
 
 
+class BubbleButton(tk.Canvas):
+    def __init__(self, master: tk.Misc, text: str, command, *, active: bool = False) -> None:
+        super().__init__(master, width=172, height=46, bg=SIDEBAR_BG, highlightthickness=0, bd=0, cursor="hand2")
+        self.text = text
+        self.command = command
+        self.active = active
+        self.hover = False
+        self.bind("<Button-1>", lambda _event: self.command())
+        self.bind("<Enter>", self._enter)
+        self.bind("<Leave>", self._leave)
+        self.draw()
+
+    def set_active(self, active: bool) -> None:
+        self.active = active
+        self.draw()
+
+    def _enter(self, _event) -> None:
+        self.hover = True
+        self.draw()
+
+    def _leave(self, _event) -> None:
+        self.hover = False
+        self.draw()
+
+    def draw(self) -> None:
+        self.delete("all")
+        fill = PINK if self.active else (PINK_SOFT if self.hover else CARD)
+        outline = PINK if self.active or self.hover else LINE
+        self.create_round_rect(2, 3, 170, 43, 14, fill=fill, outline=outline, width=2)
+        self.create_text(86, 23, text=self.text, fill=TEXT, font=("Microsoft YaHei UI", 11, "bold"))
+
+    def create_round_rect(self, x1: int, y1: int, x2: int, y2: int, radius: int, **kwargs) -> None:
+        points = [
+            x1 + radius, y1,
+            x2 - radius, y1,
+            x2, y1,
+            x2, y1 + radius,
+            x2, y2 - radius,
+            x2, y2,
+            x2 - radius, y2,
+            x1 + radius, y2,
+            x1, y2,
+            x1, y2 - radius,
+            x1, y1 + radius,
+            x1, y1,
+        ]
+        self.create_polygon(points, smooth=True, splinesteps=18, **kwargs)
+
+
 class MemeGui(BaseTk):
     def __init__(self) -> None:
         super().__init__()
@@ -608,42 +657,8 @@ class MemeGui(BaseTk):
         self._small_button(row, "清空日志", self._clear_log, bg=CARD).pack(side="left")
         return panel
 
-    def _sidebar_button(self, parent: tk.Misc, text: str, command, *, active: bool = True) -> tk.Button:
-        button = tk.Button(
-            parent,
-            text=text,
-            command=command,
-            bg=PINK if active else SIDEBAR_BG,
-            fg=TEXT,
-            activebackground=PINK if active else PINK_SOFT,
-            activeforeground=TEXT,
-            relief="flat",
-            bd=0,
-            padx=16,
-            pady=9,
-            anchor="center",
-            font=("Microsoft YaHei UI", 11, "bold"),
-            cursor="hand2",
-        )
-        self._style_sidebar_bubble(button, active)
-        button.bind("<Enter>", lambda _event, b=button: self._hover_sidebar_bubble(b, True))
-        button.bind("<Leave>", lambda _event, b=button: self._hover_sidebar_bubble(b, False))
-        return button
-
-    def _style_sidebar_bubble(self, button: tk.Button, active: bool) -> None:
-        button.configure(
-            bg=PINK if active else CARD,
-            activebackground=PINK if active else PINK_SOFT,
-            highlightthickness=2,
-            highlightbackground=PINK if active else LINE,
-            highlightcolor=PINK,
-        )
-
-    def _hover_sidebar_bubble(self, button: tk.Button, hovering: bool) -> None:
-        active = button.cget("bg") == PINK
-        if active:
-            return
-        button.configure(bg=PINK_SOFT if hovering else CARD, highlightbackground=PINK if hovering else LINE)
+    def _sidebar_button(self, parent: tk.Misc, text: str, command, *, active: bool = True) -> BubbleButton:
+        return BubbleButton(parent, text, command, active=active)
 
     def _small_button(self, parent: tk.Misc, text: str, command, *, bg: str) -> tk.Button:
         return tk.Button(
@@ -733,7 +748,8 @@ class MemeGui(BaseTk):
             else:
                 frame.pack_forget()
         for key, button in self._nav_buttons.items():
-            self._style_sidebar_bubble(button, key == mode)
+            if isinstance(button, BubbleButton):
+                button.set_active(key == mode)
         if mode == "split":
             self._hero_title.configure(text="九宫格切图器")
             self._hero_sub.configure(text="拖入拼图或粘贴图片，选宫格，点开始。结果会自动打开。")
