@@ -44,26 +44,31 @@ jobs:
         shell: powershell
         run: |
           python -c "from pathlib import Path; import shutil; target = Path('dist') / '\u4e5d\u5bab\u683c\u5207\u56fe\u5668.exe'; shutil.copyfile(Path('dist') / 'meme-gui.exe', target)"
+          Copy-Item -LiteralPath .\dist\meme-gui.exe -Destination .\dist\cut9-img-windows.exe -Force
           Remove-Item -LiteralPath .\dist\meme-gui.exe -Force
           Get-ChildItem -LiteralPath .\dist
-          Get-FileHash -LiteralPath (Get-ChildItem .\dist\*.exe | Select-Object -First 1).FullName -Algorithm SHA256
+          Get-FileHash -LiteralPath .\dist\cut9-img-windows.exe -Algorithm SHA256
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
         with:
           name: cut9-img-windows-exe
-          path: dist/*.exe
+          path: |
+            dist/cut9-img-windows.exe
+            dist/*.exe
           if-no-files-found: error
 
-      - name: Publish latest release
+      - name: Publish build release
         uses: ncipollo/release-action@v1
         with:
           token: ${{ github.token }}
-          tag: latest
-          name: Latest Windows EXE
-          body: Auto-built latest Windows executable.
-          artifacts: dist/*.exe
-          allowUpdates: true
-          replacesArtifacts: true
-          removeArtifacts: true
+          tag: build-${{ github.run_number }}
+          name: Windows EXE build ${{ github.run_number }}
+          body: |
+            自动构建的 Windows 可执行文件。
+
+            Commit: ${{ github.sha }}
+            Workflow run: ${{ github.run_number }}
+          artifacts: dist/cut9-img-windows.exe
+          allowUpdates: false
           makeLatest: true
