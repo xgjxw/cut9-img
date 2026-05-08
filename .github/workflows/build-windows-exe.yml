@@ -1,0 +1,52 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build 九宫格切图器.exe
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install pyinstaller
+
+      - name: Verify source
+        shell: powershell
+        run: |
+          python -m py_compile meme_cli\cli.py meme_cli\gui.py
+
+      - name: Build EXE
+        shell: cmd
+        run: build_gui_exe.bat
+
+      - name: Rename EXE
+        shell: powershell
+        run: |
+          Copy-Item -LiteralPath .\dist\meme-gui.exe -Destination .\dist\九宫格切图器.exe -Force
+          Get-Item -LiteralPath .\dist\九宫格切图器.exe
+          Get-FileHash -LiteralPath .\dist\九宫格切图器.exe -Algorithm SHA256
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cut9-img-windows-exe
+          path: dist/九宫格切图器.exe
+          if-no-files-found: error
