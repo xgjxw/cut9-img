@@ -236,7 +236,7 @@ class MemeGui(BaseTk):
         nav = tk.Frame(bar, bg=SIDEBAR_BG, padx=18, pady=10)
         nav.pack(fill="x")
         self._nav_buttons["split"] = self._sidebar_button(nav, "九宫格切图", lambda: self._switch_mode("split"))
-        self._nav_buttons["convert"] = self._sidebar_button(nav, "单图制作", lambda: self._switch_mode("convert"), active=False)
+        self._nav_buttons["convert"] = self._sidebar_button(nav, "转换器", lambda: self._switch_mode("convert"), active=False)
         self._nav_buttons["outputs"] = self._sidebar_button(nav, "输出目录", lambda: self._switch_mode("outputs"), active=False)
         self._nav_buttons["clear"] = self._sidebar_button(nav, "清空当前", lambda: self._clear_current(self._mode), active=False)
         self._nav_buttons["split"].pack(fill="x", pady=(0, 10))
@@ -287,10 +287,10 @@ class MemeGui(BaseTk):
         self._build_drop_zone(
             page,
             mode="convert",
-            title="放入单图",
-            subtitle="拖入图片或粘贴图片",
-            allow_dir=False,
-            browse_text="选择图片",
+            title="放入图片",
+            subtitle="选择图片或文件夹，批量转成表情图片",
+            allow_dir=True,
+            browse_text="选择图片 / 文件夹",
         ).grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         self._build_convert_options(page).grid(row=0, column=1, sticky="nsew", padx=(10, 0))
         return page
@@ -328,7 +328,8 @@ class MemeGui(BaseTk):
         preview_shell = tk.Frame(wrap, bg="#FAFAFC", highlightthickness=1, highlightbackground=LINE, width=250, height=250)
         preview_shell.grid(row=1, column=0)
         preview_shell.pack_propagate(False)
-        preview = tk.Label(preview_shell, bg="#FAFAFC", fg=TEXT_SOFT, text="点击选择图片\n或拖拽 / Ctrl+V 粘贴", justify="center", font=("Microsoft YaHei UI", 12))
+        empty_text = "点击选择图片/文件夹\n或拖拽 / Ctrl+V 粘贴" if allow_dir else "点击选择图片\n或拖拽 / Ctrl+V 粘贴"
+        preview = tk.Label(preview_shell, bg="#FAFAFC", fg=TEXT_SOFT, text=empty_text, justify="center", font=("Microsoft YaHei UI", 12))
         preview.pack(fill="both", expand=True)
 
         hint = "支持拖拽和 Ctrl+V 粘贴" if DND_READY else "可用 Ctrl+V 粘贴，或点击选择图片"
@@ -337,11 +338,12 @@ class MemeGui(BaseTk):
 
         action = tk.Frame(wrap, bg=CARD)
         action.grid(row=3, column=0, pady=(10, 0))
-        self._small_button(action, browse_text, lambda: self._choose_input_file(mode), bg=PINK_SOFT).pack()
+        choose_cmd = (lambda: self._choose_input_file_or_dir(mode)) if allow_dir else (lambda: self._choose_input_file(mode))
+        self._small_button(action, browse_text, choose_cmd, bg=PINK_SOFT).pack()
 
         self._input_views[mode] = {"preview": preview, "info": info}
-        preview_shell.bind("<Button-1>", lambda _event: self._choose_input_file(mode))
-        preview.bind("<Button-1>", lambda _event: self._choose_input_file(mode))
+        preview_shell.bind("<Button-1>", lambda _event: choose_cmd())
+        preview.bind("<Button-1>", lambda _event: choose_cmd())
         for widget in (wrap, preview_shell, preview):
             self._bind_drop(widget, mode, allow_dir)
         return wrap
@@ -806,9 +808,9 @@ class MemeGui(BaseTk):
             self._hero_sub.configure(text="拖入拼图或粘贴图片，选宫格，点开始。结果会自动打开。")
             self._set_toast("准备好了，选择或粘贴一张拼图即可开始。")
         elif mode == "convert":
-            self._hero_title.configure(text="单图制作器")
-            self._hero_sub.configure(text="把单张图片统一转成 GIF / PNG，可自动背景转透明。")
-            self._set_toast("选择或粘贴一张图片即可开始制作。")
+            self._hero_title.configure(text="转换器")
+            self._hero_sub.configure(text="把单张或整个文件夹的图片批量转成 GIF / PNG，可自动背景转透明。")
+            self._set_toast("选择图片或文件夹即可开始转换。")
         else:
             self._hero_title.configure(text="输出目录")
             self._hero_sub.configure(text="快速打开最近自动生成的结果目录。")
@@ -896,11 +898,12 @@ class MemeGui(BaseTk):
         self._vars(mode)["output"].set("")
         view = self._input_views.get(mode)
         if view:
-            view["preview"].configure(image="", text="点击选择图片\n或拖拽 / Ctrl+V 粘贴")
+            empty_text = "点击选择图片/文件夹\n或拖拽 / Ctrl+V 粘贴" if mode == "convert" else "点击选择图片\n或拖拽 / Ctrl+V 粘贴"
+            view["preview"].configure(image="", text=empty_text)
             hint = "支持拖拽和 Ctrl+V 粘贴" if DND_READY else "可用 Ctrl+V 粘贴，或点击选择图片"
             view["info"].configure(text=hint)
         self._preview_refs.pop(mode, None)
-        idle_text = "请先选择拼图" if mode == "split" else "请先选择图片"
+        idle_text = "请先选择拼图" if mode == "split" else "请先选择图片或文件夹"
         if mode in self._action_buttons:
             self._action_buttons[mode].configure(text=idle_text, state="disabled", bg="#E8E3E8", fg=TEXT_SOFT, cursor="arrow")
         if mode in self._status_labels:
@@ -915,14 +918,14 @@ class MemeGui(BaseTk):
         vars_map["output"].set(str(self._suggest_output(mode, path)))
         self._update_preview(mode, path)
         if mode in self._action_buttons:
-            text = "开始切图" if mode == "split" else "开始制作"
+            text = "开始切图" if mode == "split" else "开始转换"
             self._action_buttons[mode].configure(text=text, state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
         if mode in self._status_labels:
             if mode == "split":
                 rows, cols = self.split_vars["rows"].get(), self.split_vars["cols"].get()
                 status = f"将按 {rows} x {cols} 切图，完成后自动打开结果目录"
             else:
-                status = "将转换为表情图片，完成后自动打开结果目录"
+                status = "将批量转换为表情图片，完成后自动打开结果目录"
             self._status_labels[mode].configure(text=status, fg=TEXT_SOFT)
         if mode in self._open_result_buttons:
             self._open_result_buttons[mode].pack_forget()
@@ -940,7 +943,7 @@ class MemeGui(BaseTk):
 
         if path.is_dir():
             count = len([p for p in path.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS])
-            preview.configure(image="", text="文件夹")
+            preview.configure(image="", text="文件夹\n批量转换")
             info.configure(text=f"{path.name}，共 {count} 张支持图片")
             self._preview_refs.pop(mode, None)
             return
@@ -1143,9 +1146,9 @@ class MemeGui(BaseTk):
     def _show_success(self, output_dir: Path, mode: str) -> None:
         count = len([p for p in output_dir.iterdir() if p.is_file() and p.suffix.lower() in {".gif", ".png"} and p.name != "preview_boxes.png"])
         if mode in self._action_buttons:
-            self._action_buttons[mode].configure(text="继续切图" if mode == "split" else "继续制作", state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
+            self._action_buttons[mode].configure(text="继续切图" if mode == "split" else "继续转换", state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
         if mode in self._status_labels:
-            verb = "切出" if mode == "split" else "生成"
+            verb = "切出" if mode == "split" else "转换"
             self._status_labels[mode].configure(text=f"已{verb} {count} 张图片，结果目录已打开。", fg=GREEN_TEXT)
         if mode in self._open_result_buttons:
             self._open_result_buttons[mode].pack(pady=(10, 0))
