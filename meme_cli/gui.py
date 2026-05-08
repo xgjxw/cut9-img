@@ -123,6 +123,7 @@ class MemeGui(BaseTk):
             "keep_gif": tk.BooleanVar(value=False),
             "dedupe": tk.BooleanVar(value=True),
             "wechat_safe": tk.BooleanVar(value=True),
+            "transparent_bg": tk.BooleanVar(value=True),
             "manifest_csv": tk.BooleanVar(value=True),
         }
         self.split_vars = {
@@ -342,6 +343,16 @@ class MemeGui(BaseTk):
             selectcolor=YELLOW_SOFT,
             font=("Microsoft YaHei UI", 10),
         ).pack(anchor="w", pady=(16, 0))
+        tk.Checkbutton(
+            right.inner,
+            text="背景转透明",
+            variable=self.convert_vars["transparent_bg"],
+            bg=YELLOW_SOFT,
+            fg=TEXT,
+            activebackground=YELLOW_SOFT,
+            selectcolor=YELLOW_SOFT,
+            font=("Microsoft YaHei UI", 10),
+        ).pack(anchor="w", pady=(8, 0))
         return row
 
     def _build_split_options(self, parent: tk.Frame) -> tk.Frame:
@@ -920,6 +931,7 @@ class MemeGui(BaseTk):
                 keep_gif=bool(self.convert_vars["keep_gif"].get()),
                 dedupe=bool(self.convert_vars["dedupe"].get()),
                 wechat_safe=bool(self.convert_vars["wechat_safe"].get()),
+                transparent_bg=bool(self.convert_vars["transparent_bg"].get()),
                 manifest_csv=bool(self.convert_vars["manifest_csv"].get()),
                 dry_run=False,
                 command="convert",

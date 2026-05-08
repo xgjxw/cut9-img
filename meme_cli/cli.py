@@ -197,21 +197,35 @@ def inspect_source(path: Path) -> SourceInfo:
     )
 
 
-def render_png(source: Path, target: Path, force_size: int) -> tuple[int, int, int]:
+def render_png(source: Path, target: Path, force_size: int, transparent_bg: bool = False) -> tuple[int, int, int]:
     with Image.open(source) as image:
         image = resize_frame(image, force_size)
+        if transparent_bg:
+            image = make_background_transparent(
+                image,
+                bg_rgb=sample_background_rgb(image),
+                bg_tolerance=18,
+                white_threshold=245,
+            )
         width, height = image.size
         image.save(target, format="PNG", optimize=True)
     return width, height, 1
 
 
-def render_gif(source: Path, target: Path, force_size: int, mode: int) -> tuple[int, int, int]:
+def render_gif(source: Path, target: Path, force_size: int, mode: int, transparent_bg: bool = False) -> tuple[int, int, int]:
     with Image.open(source) as image:
         durations: list[int] = []
         frames: list[Image.Image] = []
 
         for frame in ImageSequence.Iterator(image):
             rgba = resize_frame(frame, force_size)
+            if transparent_bg:
+                rgba = make_background_transparent(
+                    rgba,
+                    bg_rgb=sample_background_rgb(rgba),
+                    bg_tolerance=18,
+                    white_threshold=245,
+                )
             frames.append(quantize_rgba(rgba, mode))
             durations.append(frame.info.get("duration", image.info.get("duration", 100)))
 
@@ -295,6 +309,7 @@ def render_with_limit(
     resolved_format: str,
     mode: int,
     max_bytes: int | None,
+    transparent_bg: bool = False,
 ) -> tuple[int, int, int, int, str]:
     current_edge = initial_resize_edge(source_info, requested_size)
     note = ""
@@ -302,9 +317,9 @@ def render_with_limit(
     while True:
         force_size = 0 if requested_size == 0 and current_edge >= max(source_info.width, source_info.height) else current_edge
         if resolved_format == "png":
-            width, height, frames = render_png(source_info.source, target, force_size)
+            width, height, frames = render_png(source_info.source, target, force_size, transparent_bg)
         else:
-            width, height, frames = render_gif(source_info.source, target, force_size, mode)
+            width, height, frames = render_gif(source_info.source, target, force_size, mode, transparent_bg)
 
         file_size = target.stat().st_size
         if max_bytes is None or file_size <= max_bytes:
@@ -367,6 +382,7 @@ def convert_one(
     dry_run: bool,
     max_bytes: int | None,
     wechat_safe: bool,
+    transparent_bg: bool = False,
 ) -> ManifestEntry:
     resolved_format = resolve_output_format(requested_format, source_info, wechat_safe)
     target = relative_target(source_root, source_info.source, output_root, resolved_format)
@@ -385,7 +401,7 @@ def convert_one(
             target=target,
             requested_size=requested_size,
             resolved_format=resolved_format,
-            keep_gif=keep_gif,
+            keep_gif=keep_gif and not transparent_bg,
             max_bytes=max_bytes,
         )
         if copied_directly:
@@ -402,6 +418,7 @@ def convert_one(
                 resolved_format=resolved_format,
                 mode=mode,
                 max_bytes=max_bytes,
+                transparent_bg=transparent_bg,
             )
             output_sha256 = sha256_file(target)
 
@@ -1090,6 +1107,7 @@ def build_parser() -> argparse.ArgumentParser:
     convert.add_argument("--dedupe", action="store_true", help="Skip duplicate source files by SHA256")
     convert.add_argument("--max-bytes", type=parse_max_bytes, default=None, help="Try shrinking output until file size fits")
     convert.add_argument("--wechat-safe", action="store_true", help="Prefer safer WeChat defaults")
+    convert.add_argument("--transparent-bg", action="store_true", help="Turn detected background transparent")
     convert.add_argument("--manifest-csv", action="store_true", help="Also write manifest.csv")
     convert.add_argument("--dry-run", action="store_true", help="Scan only, do not write output files")
 
@@ -1199,6 +1217,7 @@ def run_convert(args: argparse.Namespace) -> int:
                 dry_run=args.dry_run,
                 max_bytes=args.max_bytes,
                 wechat_safe=args.wechat_safe,
+                transparent_bg=getattr(args, "transparent_bg", False),
             )
             entries.append(entry)
             seen_hashes[source_info.source_sha256] = str(source_info.source)
