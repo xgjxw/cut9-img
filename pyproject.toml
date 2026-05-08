@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Batch convert images into WeChat-friendly meme assets."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["Pillow>=10", "tkinterdnd2>=0.4.3"]
+dependencies = ["Pillow>=10", "tkinterdnd2>=0.4.3", "pycryptodome>=3.20"]
 
 [project.scripts]
 meme-cli = "meme_cli.cli:main"
