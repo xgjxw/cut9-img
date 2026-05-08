@@ -97,8 +97,8 @@ class MemeGui(BaseTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("九宫格切图器")
-        self.geometry("760x820")
-        self.minsize(680, 760)
+        self.geometry("980x760")
+        self.minsize(900, 700)
         self.configure(bg=BG)
 
         self._running = False
@@ -112,6 +112,10 @@ class MemeGui(BaseTk):
         self._start_button: tk.Button | None = None
         self._open_result_button: tk.Button | None = None
         self._status_label: tk.Label | None = None
+        self._action_buttons: dict[str, tk.Button] = {}
+        self._status_labels: dict[str, tk.Label] = {}
+        self._open_result_buttons: dict[str, tk.Button] = {}
+        self._output_list_body: tk.Frame | None = None
 
         self.convert_vars = {
             "input": tk.StringVar(),
@@ -163,6 +167,7 @@ class MemeGui(BaseTk):
     def _build_ui(self) -> None:
         root = tk.Frame(self, bg=BG)
         root.pack(fill="both", expand=True)
+        self._build_sidebar(root)
         self._build_main(root)
 
     def _build_sidebar(self, root: tk.Frame) -> None:
@@ -177,11 +182,13 @@ class MemeGui(BaseTk):
 
         nav = tk.Frame(bar, bg=SIDEBAR_BG, padx=18, pady=10)
         nav.pack(fill="x")
-        self._nav_buttons["convert"] = self._sidebar_button(nav, "制作器", lambda: self._switch_mode("convert"))
-        self._nav_buttons["split"] = self._sidebar_button(nav, "切图器", lambda: self._switch_mode("split"))
+        self._nav_buttons["split"] = self._sidebar_button(nav, "九宫格切图", lambda: self._switch_mode("split"))
+        self._nav_buttons["convert"] = self._sidebar_button(nav, "单图制作", lambda: self._switch_mode("convert"), active=False)
+        self._nav_buttons["outputs"] = self._sidebar_button(nav, "输出目录", lambda: self._switch_mode("outputs"), active=False)
         self._nav_buttons["clear"] = self._sidebar_button(nav, "清空当前", lambda: self._clear_current(self._mode), active=False)
-        self._nav_buttons["convert"].pack(fill="x", pady=(0, 10))
         self._nav_buttons["split"].pack(fill="x", pady=(0, 10))
+        self._nav_buttons["convert"].pack(fill="x", pady=(0, 10))
+        self._nav_buttons["outputs"].pack(fill="x", pady=(0, 10))
         self._nav_buttons["clear"].pack(fill="x", pady=(18, 0))
 
         footer = tk.Frame(bar, bg=SIDEBAR_BG, padx=18, pady=18)
@@ -198,13 +205,13 @@ class MemeGui(BaseTk):
         tk.Label(meta, text="本地模式", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 8)).pack(anchor="w")
 
     def _build_main(self, root: tk.Frame) -> None:
-        main = tk.Frame(root, bg=BG, padx=34, pady=20)
-        main.pack(fill="both", expand=True)
+        main = tk.Frame(root, bg=BG, padx=28, pady=20)
+        main.pack(side="left", fill="both", expand=True)
         self.main = main
 
-        self._hero_title = tk.Label(main, text="九宫格切图器", bg=BG, fg=TEXT, font=("Microsoft YaHei UI", 24, "bold"))
+        self._hero_title = tk.Label(main, text="", bg=BG, fg=TEXT, font=("Microsoft YaHei UI", 24, "bold"))
         self._hero_title.pack()
-        self._hero_sub = tk.Label(main, text="拖入拼图或粘贴图片，选宫格，点开始。结果会自动打开。", bg=BG, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 10))
+        self._hero_sub = tk.Label(main, text="", bg=BG, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 10))
         self._hero_sub.pack(pady=(6, 12))
 
         self._toast_outer, toast_body = make_card(main, bg=PILL_BG, border=PILL_BG, padx=18, pady=9)
@@ -214,19 +221,25 @@ class MemeGui(BaseTk):
 
         self.page_host = tk.Frame(main, bg=BG)
         self.page_host.pack(fill="both", expand=True)
-        self.pages = {"split": self._build_split_page()}
+        self.pages = {
+            "split": self._build_split_page(),
+            "convert": self._build_convert_page(),
+            "outputs": self._build_outputs_page(),
+        }
 
     def _build_convert_page(self) -> tk.Frame:
         page = tk.Frame(self.page_host, bg=BG)
+        page.grid_columnconfigure(0, weight=1)
+        page.grid_columnconfigure(1, weight=1)
         self._build_drop_zone(
             page,
             mode="convert",
-            title="导入图片",
-            subtitle="拖图、粘贴、点选，把图片变成更适合发送的格式",
+            title="放入单图",
+            subtitle="拖入图片或粘贴图片",
             allow_dir=False,
             browse_text="选择图片",
-        ).pack(fill="x", pady=(0, 14))
-        self._build_convert_options(page).pack(fill="x")
+        ).grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        self._build_convert_options(page).grid(row=0, column=1, sticky="nsew", padx=(10, 0))
         return page
 
     def _build_split_page(self) -> tk.Frame:
@@ -320,40 +333,33 @@ class MemeGui(BaseTk):
         return outer
 
     def _build_convert_options(self, parent: tk.Frame) -> tk.Frame:
-        row = tk.Frame(parent, bg=BG)
-        row.grid_columnconfigure(0, weight=1, uniform="convert")
-        row.grid_columnconfigure(1, weight=1, uniform="convert")
+        outer, body = make_card(parent, bg=CARD, border=LINE, padx=24, pady=14)
+        tk.Label(body, text="格式", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w")
+        self._chip_group(body, self.convert_vars["format"], [("GIF", "gif"), ("PNG", "png")]).pack(anchor="w", pady=(8, 16))
 
-        left = self._option_panel(row, "输出格式", "格式 / 调色模式", bg=PINK_SOFT)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        self._chip_group(left.inner, self.convert_vars["format"], [("GIF", "gif"), ("PNG", "png")]).pack(anchor="w", pady=(14, 0))
-        tk.Label(left.inner, text="转换风格", bg=PINK_SOFT, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(14, 6))
-        self._chip_group(left.inner, self.convert_vars["mode"], [("模式 1", "1"), ("模式 2", "2")]).pack(anchor="w")
+        tk.Label(body, text="尺寸", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w")
+        self._chip_group(body, self.convert_vars["size"], [("原图", "raw"), ("200px", "200"), ("240px", "240")]).pack(anchor="w", pady=(8, 16))
 
-        right = self._option_panel(row, "输出尺寸", "尺寸 / 微信兼容", bg=YELLOW_SOFT)
-        right.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
-        self._chip_group(right.inner, self.convert_vars["size"], [("原图", "raw"), ("小", "160"), ("中", "200"), ("大", "240")]).pack(anchor="w", pady=(14, 0))
-        tk.Checkbutton(
-            right.inner,
-            text="微信稳妥模式",
-            variable=self.convert_vars["wechat_safe"],
-            bg=YELLOW_SOFT,
-            fg=TEXT,
-            activebackground=YELLOW_SOFT,
-            selectcolor=YELLOW_SOFT,
-            font=("Microsoft YaHei UI", 10),
-        ).pack(anchor="w", pady=(16, 0))
-        tk.Checkbutton(
-            right.inner,
-            text="背景转透明",
-            variable=self.convert_vars["transparent_bg"],
-            bg=YELLOW_SOFT,
-            fg=TEXT,
-            activebackground=YELLOW_SOFT,
-            selectcolor=YELLOW_SOFT,
-            font=("Microsoft YaHei UI", 10),
-        ).pack(anchor="w", pady=(8, 0))
-        return row
+        tk.Label(body, text="调色模式", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w")
+        self._chip_group(body, self.convert_vars["mode"], [("模式 1", "1"), ("模式 2", "2")]).pack(anchor="w", pady=(8, 12))
+
+        for text, variable in [
+            ("背景转透明", self.convert_vars["transparent_bg"]),
+            ("微信稳妥模式", self.convert_vars["wechat_safe"]),
+        ]:
+            tk.Checkbutton(
+                body,
+                text=text,
+                variable=variable,
+                bg=CARD,
+                fg=TEXT,
+                activebackground=CARD,
+                selectcolor=CARD,
+                font=("Microsoft YaHei UI", 10),
+            ).pack(anchor="w", pady=(0, 8))
+
+        self._build_mode_action(body, mode="convert", idle_text="请先选择图片", action_text="开始制作", command=self.start_convert)
+        return outer
 
     def _build_split_options(self, parent: tk.Frame) -> tk.Frame:
         outer, body = make_card(parent, bg=CARD, border=LINE, padx=24, pady=14)
@@ -386,12 +392,16 @@ class MemeGui(BaseTk):
         )
         transparent.pack(anchor="w", pady=(0, 8))
 
-        action = tk.Frame(body, bg=CARD)
+        self._build_mode_action(body, mode="split", idle_text="请先选择拼图", action_text="开始切图", command=self.start_split)
+        return outer
+
+    def _build_mode_action(self, parent: tk.Frame, *, mode: str, idle_text: str, action_text: str, command) -> None:
+        action = tk.Frame(parent, bg=CARD)
         action.pack(fill="x", pady=(14, 0))
-        self._start_button = tk.Button(
+        button = tk.Button(
             action,
-            text="请先选择拼图",
-            command=self.start_split,
+            text=idle_text,
+            command=command,
             bg="#E8E3E8",
             fg=TEXT_SOFT,
             disabledforeground=TEXT_SOFT,
@@ -405,11 +415,17 @@ class MemeGui(BaseTk):
             cursor="arrow",
             state="disabled",
         )
-        self._start_button.pack()
-        self._status_label = tk.Label(action, text="完成后自动打开结果目录", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9))
-        self._status_label.pack(pady=(10, 0))
-        self._open_result_button = self._small_button(action, "再次打开结果目录", lambda: self._open_dir(self.split_vars["output"].get()), bg=SIDEBAR_BG)
-        return outer
+        button.pack()
+        status = tk.Label(action, text="完成后自动打开结果目录", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9))
+        status.pack(pady=(10, 0))
+        open_button = self._small_button(action, "再次打开结果目录", lambda m=mode: self._open_dir(self._vars(m)["output"].get()), bg=SIDEBAR_BG)
+        self._action_buttons[mode] = button
+        self._status_labels[mode] = status
+        self._open_result_buttons[mode] = open_button
+        if mode == "split":
+            self._start_button = button
+            self._status_label = status
+            self._open_result_button = open_button
 
     def _build_action_footer(self, parent: tk.Frame) -> tk.Frame:
         wrap = tk.Frame(parent, bg=BG)
@@ -435,6 +451,45 @@ class MemeGui(BaseTk):
         self._status_label.pack(pady=(12, 0))
         self._open_result_button = self._small_button(wrap, "再次打开结果目录", lambda: self._open_dir(self.split_vars["output"].get()), bg=SIDEBAR_BG)
         return wrap
+
+    def _build_outputs_page(self) -> tk.Frame:
+        page = tk.Frame(self.page_host, bg=BG)
+        outer, body = make_card(page, bg=CARD, border=LINE, padx=24, pady=18)
+        outer.pack(fill="both", expand=True)
+        head = tk.Frame(body, bg=CARD)
+        head.pack(fill="x")
+        tk.Label(head, text="输出目录", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 16, "bold")).pack(side="left")
+        self._small_button(head, "刷新", self._refresh_output_dirs, bg=PINK_SOFT).pack(side="right")
+        tk.Label(body, text="这里会列出最近自动生成的结果目录，点击即可打开。", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(8, 16))
+        self._output_list_body = tk.Frame(body, bg=CARD)
+        self._output_list_body.pack(fill="both", expand=True)
+        self._refresh_output_dirs()
+        return page
+
+    def _output_root(self) -> Path:
+        return Path(tempfile.gettempdir()) / "meme-cli-output"
+
+    def _refresh_output_dirs(self) -> None:
+        if self._output_list_body is None:
+            return
+        for child in self._output_list_body.winfo_children():
+            child.destroy()
+        root = self._output_root()
+        dirs = [p for p in root.iterdir() if p.is_dir()] if root.exists() else []
+        dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        if not dirs:
+            tk.Label(self._output_list_body, text="还没有输出结果。完成一次切图或制作后会出现在这里。", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 10)).pack(anchor="w")
+            return
+        for path in dirs[:30]:
+            row = tk.Frame(self._output_list_body, bg="#FBFBFC", padx=14, pady=10, highlightthickness=1, highlightbackground=LINE)
+            row.pack(fill="x", pady=(0, 8))
+            meta = tk.Frame(row, bg="#FBFBFC")
+            meta.pack(side="left", fill="x", expand=True)
+            tk.Label(meta, text=path.name, bg="#FBFBFC", fg=TEXT, font=("Microsoft YaHei UI", 10, "bold")).pack(anchor="w")
+            count = len([p for p in path.iterdir() if p.is_file() and p.suffix.lower() in {".gif", ".png"} and p.name != "preview_boxes.png"])
+            mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(path.stat().st_mtime))
+            tk.Label(meta, text=f"{count} 张图片 · {mtime}", bg="#FBFBFC", fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(3, 0))
+            self._small_button(row, "打开", lambda p=path: self._open_dir(str(p)), bg=MINT).pack(side="right")
 
     def _option_panel(self, parent: tk.Frame, title: str, subtitle: str, *, bg: str) -> tk.Frame:
         outer = tk.Frame(parent, bg=bg, highlightthickness=1, highlightbackground=bg, bd=0)
@@ -497,7 +552,7 @@ class MemeGui(BaseTk):
             parent,
             text=text,
             command=command,
-            bg=PINK if active and text == "制作器" else SIDEBAR_BG,
+            bg=PINK if active else SIDEBAR_BG,
             fg=TEXT,
             activebackground=PINK_SOFT if not active else PINK,
             activeforeground=TEXT,
@@ -589,13 +644,29 @@ class MemeGui(BaseTk):
             self.page_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _switch_mode(self, mode: str) -> None:
-        self._mode = "split"
+        if mode not in self.pages:
+            mode = "split"
+        self._mode = mode
         for key, frame in self.pages.items():
-            if key == "split":
+            if key == mode:
                 frame.pack(fill="both", expand=True)
             else:
                 frame.pack_forget()
-        self._set_toast("准备好了，选择或粘贴一张拼图即可开始。")
+        for key, button in self._nav_buttons.items():
+            button.configure(bg=PINK if key == mode else SIDEBAR_BG)
+        if mode == "split":
+            self._hero_title.configure(text="九宫格切图器")
+            self._hero_sub.configure(text="拖入拼图或粘贴图片，选宫格，点开始。结果会自动打开。")
+            self._set_toast("准备好了，选择或粘贴一张拼图即可开始。")
+        elif mode == "convert":
+            self._hero_title.configure(text="单图制作器")
+            self._hero_sub.configure(text="把单张图片统一转成 GIF / PNG，可自动背景转透明。")
+            self._set_toast("选择或粘贴一张图片即可开始制作。")
+        else:
+            self._hero_title.configure(text="输出目录")
+            self._hero_sub.configure(text="快速打开最近自动生成的结果目录。")
+            self._set_toast("这里会自动收集切图和制作输出。")
+            self._refresh_output_dirs()
 
     def _set_toast(self, text: str) -> None:
         self._toast_label.configure(text=text)
@@ -671,6 +742,9 @@ class MemeGui(BaseTk):
             variable.set(path)
 
     def _clear_current(self, mode: str) -> None:
+        if mode == "outputs":
+            self._refresh_output_dirs()
+            return
         self._vars(mode)["input"].set("")
         self._vars(mode)["output"].set("")
         view = self._input_views.get(mode)
@@ -679,12 +753,13 @@ class MemeGui(BaseTk):
             hint = "支持拖拽和 Ctrl+V 粘贴" if DND_READY else "可用 Ctrl+V 粘贴，或点击选择图片"
             view["info"].configure(text=hint)
         self._preview_refs.pop(mode, None)
-        if self._start_button is not None:
-            self._start_button.configure(text="请先选择拼图", state="disabled", bg="#E8E3E8", fg=TEXT_SOFT, cursor="arrow")
-        if self._status_label is not None:
-            self._status_label.configure(text="完成后自动打开结果目录", fg=TEXT_SOFT)
-        if self._open_result_button is not None:
-            self._open_result_button.pack_forget()
+        idle_text = "请先选择拼图" if mode == "split" else "请先选择图片"
+        if mode in self._action_buttons:
+            self._action_buttons[mode].configure(text=idle_text, state="disabled", bg="#E8E3E8", fg=TEXT_SOFT, cursor="arrow")
+        if mode in self._status_labels:
+            self._status_labels[mode].configure(text="完成后自动打开结果目录", fg=TEXT_SOFT)
+        if mode in self._open_result_buttons:
+            self._open_result_buttons[mode].pack_forget()
         self._flash_toast("已清空，可以重新导入拼图。")
 
     def _set_input(self, mode: str, path: Path) -> None:
@@ -692,13 +767,18 @@ class MemeGui(BaseTk):
         vars_map["input"].set(str(path))
         vars_map["output"].set(str(self._suggest_output(mode, path)))
         self._update_preview(mode, path)
-        if mode == "split" and self._start_button is not None:
-            self._start_button.configure(text="开始切图", state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
-        if self._status_label is not None:
-            rows, cols = self.split_vars["rows"].get(), self.split_vars["cols"].get()
-            self._status_label.configure(text=f"将按 {rows} x {cols} 切图，完成后自动打开结果目录", fg=TEXT_SOFT)
-        if self._open_result_button is not None:
-            self._open_result_button.pack_forget()
+        if mode in self._action_buttons:
+            text = "开始切图" if mode == "split" else "开始制作"
+            self._action_buttons[mode].configure(text=text, state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
+        if mode in self._status_labels:
+            if mode == "split":
+                rows, cols = self.split_vars["rows"].get(), self.split_vars["cols"].get()
+                status = f"将按 {rows} x {cols} 切图，完成后自动打开结果目录"
+            else:
+                status = "将转换为表情图片，完成后自动打开结果目录"
+            self._status_labels[mode].configure(text=status, fg=TEXT_SOFT)
+        if mode in self._open_result_buttons:
+            self._open_result_buttons[mode].pack_forget()
 
     def _suggest_output(self, mode: str, path: Path) -> Path:
         stem = path.name if path.is_dir() else path.stem
@@ -808,8 +888,8 @@ class MemeGui(BaseTk):
         current = self.split_vars["input"].get().strip()
         if current:
             self._update_preview("split", Path(current))
-        if self._status_label is not None:
-            self._status_label.configure(text=f"将按 {rows} x {cols} 切图，完成后自动打开结果目录")
+        if "split" in self._status_labels:
+            self._status_labels["split"].configure(text=f"将按 {rows} x {cols} 切图，完成后自动打开结果目录")
         self._flash_toast(f"已切换为 {rows} x {cols} 网格。")
 
     def _open_dir(self, value: str) -> None:
@@ -868,10 +948,12 @@ class MemeGui(BaseTk):
         self._running = True
         self._append_log(f"== {title} ==")
         self._flash_toast(f"{title} 已开始执行……", reset=False)
-        if self._start_button is not None:
-            self._start_button.configure(text="正在切图…", state="disabled", bg="#E8E3E8", fg=TEXT_SOFT, cursor="arrow")
-        if self._status_label is not None:
-            self._status_label.configure(text="正在处理，请稍等。", fg=TEXT_SOFT)
+        job_mode = getattr(args, "command", "")
+        ui_mode = "split" if job_mode == "split-sheet" else "convert"
+        if ui_mode in self._action_buttons:
+            self._action_buttons[ui_mode].configure(text="正在处理…", state="disabled", bg="#E8E3E8", fg=TEXT_SOFT, cursor="arrow")
+        if ui_mode in self._status_labels:
+            self._status_labels[ui_mode].configure(text="正在处理，请稍等。", fg=TEXT_SOFT)
 
         def worker() -> None:
             buf = io.StringIO()
@@ -886,15 +968,15 @@ class MemeGui(BaseTk):
                     out_dir = Path(args.output).expanduser().resolve()
                     self.after(0, lambda: self._update_recent_output(out_dir))
                     self.after(0, lambda: self._open_dir(str(out_dir)))
-                    self.after(0, lambda: self._show_success(out_dir))
+                    self.after(0, lambda m=ui_mode: self._show_success(out_dir, m))
                     self.after(0, lambda: self._flash_toast(f"{title} 已完成。"))
                 else:
                     self.after(0, lambda: self._flash_toast(f"{title} 已结束，返回 code={code}。"))
-                    self.after(0, lambda: self._restore_start_button("切图失败，再试一次"))
+                    self.after(0, lambda m=ui_mode: self._restore_start_button(m, "处理失败，再试一次"))
             except Exception:
                 self.after(0, lambda: self._append_log(traceback.format_exc()))
                 self.after(0, lambda: self._flash_toast("任务失败，请重新选择图片。", reset=False))
-                self.after(0, lambda: self._restore_start_button("切图失败，再试一次"))
+                self.after(0, lambda m=ui_mode: self._restore_start_button(m, "处理失败，再试一次"))
             finally:
                 self.after(0, self._clear_running)
 
@@ -903,20 +985,23 @@ class MemeGui(BaseTk):
     def _clear_running(self) -> None:
         self._running = False
 
-    def _restore_start_button(self, text: str = "开始切图") -> None:
-        if self._start_button is not None:
-            self._start_button.configure(text=text, state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
-        if self._status_label is not None:
-            self._status_label.configure(text="完成后自动打开结果目录", fg=TEXT_SOFT)
+    def _restore_start_button(self, mode: str, text: str | None = None) -> None:
+        text = text or ("开始切图" if mode == "split" else "开始制作")
+        if mode in self._action_buttons:
+            self._action_buttons[mode].configure(text=text, state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
+        if mode in self._status_labels:
+            self._status_labels[mode].configure(text="完成后自动打开结果目录", fg=TEXT_SOFT)
 
-    def _show_success(self, output_dir: Path) -> None:
+    def _show_success(self, output_dir: Path, mode: str) -> None:
         count = len([p for p in output_dir.iterdir() if p.is_file() and p.suffix.lower() in {".gif", ".png"} and p.name != "preview_boxes.png"])
-        if self._start_button is not None:
-            self._start_button.configure(text="继续切图", state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
-        if self._status_label is not None:
-            self._status_label.configure(text=f"已切出 {count} 张图片，结果目录已打开。", fg=GREEN_TEXT)
-        if self._open_result_button is not None:
-            self._open_result_button.pack(pady=(10, 0))
+        if mode in self._action_buttons:
+            self._action_buttons[mode].configure(text="继续切图" if mode == "split" else "继续制作", state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
+        if mode in self._status_labels:
+            verb = "切出" if mode == "split" else "生成"
+            self._status_labels[mode].configure(text=f"已{verb} {count} 张图片，结果目录已打开。", fg=GREEN_TEXT)
+        if mode in self._open_result_buttons:
+            self._open_result_buttons[mode].pack(pady=(10, 0))
+        self._refresh_output_dirs()
 
     def start_convert(self) -> None:
         try:
