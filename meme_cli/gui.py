@@ -395,23 +395,16 @@ class MemeGui(BaseTk):
         tk.Label(body, text="尺寸", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w")
         self._chip_group(body, self.convert_vars["size"], [("原图", "raw"), ("200px", "200"), ("240px", "240")]).pack(anchor="w", pady=(8, 16))
 
-        tk.Label(body, text="调色模式", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w")
-        self._chip_group(body, self.convert_vars["mode"], [("模式 1", "1"), ("模式 2", "2")]).pack(anchor="w", pady=(8, 12))
-
-        for text, variable in [
-            ("背景转透明", self.convert_vars["transparent_bg"]),
-            ("微信稳妥模式", self.convert_vars["wechat_safe"]),
-        ]:
-            tk.Checkbutton(
-                body,
-                text=text,
-                variable=variable,
-                bg=CARD,
-                fg=TEXT,
-                activebackground=CARD,
-                selectcolor=CARD,
-                font=("Microsoft YaHei UI", 10),
-            ).pack(anchor="w", pady=(0, 8))
+        tk.Checkbutton(
+            body,
+            text="背景转透明",
+            variable=self.convert_vars["transparent_bg"],
+            bg=CARD,
+            fg=TEXT,
+            activebackground=CARD,
+            selectcolor=CARD,
+            font=("Microsoft YaHei UI", 10),
+        ).pack(anchor="w", pady=(0, 8))
 
         self._build_mode_action(body, mode="convert", idle_text="请先选择图片", action_text="开始制作", command=self.start_convert)
         return outer
