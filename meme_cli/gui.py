@@ -118,6 +118,7 @@ class MemeGui(BaseTk):
         self._status_labels: dict[str, tk.Label] = {}
         self._open_result_buttons: dict[str, tk.Button] = {}
         self._output_list_body: tk.Frame | None = None
+        self._output_canvas: tk.Canvas | None = None
 
         self.convert_vars = {
             "input": tk.StringVar(),
@@ -463,13 +464,28 @@ class MemeGui(BaseTk):
         tk.Label(head, text="输出目录", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 16, "bold")).pack(side="left")
         self._small_button(head, "刷新", self._refresh_output_dirs, bg=PINK_SOFT).pack(side="right")
         tk.Label(body, text="这里会列出最近自动生成的结果目录，点击即可打开。", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(8, 16))
-        self._output_list_body = tk.Frame(body, bg=CARD)
-        self._output_list_body.pack(fill="both", expand=True)
+        list_wrap = tk.Frame(body, bg=CARD)
+        list_wrap.pack(fill="both", expand=True)
+        self._output_canvas = tk.Canvas(list_wrap, bg=CARD, highlightthickness=0, bd=0)
+        scrollbar = tk.Scrollbar(list_wrap, orient="vertical", command=self._output_canvas.yview)
+        self._output_canvas.configure(yscrollcommand=scrollbar.set)
+        self._output_canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self._output_list_body = tk.Frame(self._output_canvas, bg=CARD)
+        window = self._output_canvas.create_window((0, 0), window=self._output_list_body, anchor="nw")
+        self._output_list_body.bind("<Configure>", lambda _event: self._output_canvas.configure(scrollregion=self._output_canvas.bbox("all")) if self._output_canvas else None)
+        self._output_canvas.bind("<Configure>", lambda event: self._output_canvas.itemconfigure(window, width=event.width))
+        self._output_canvas.bind("<Enter>", lambda _event: self.bind_all("<MouseWheel>", self._on_output_mousewheel, add=True))
+        self._output_canvas.bind("<Leave>", lambda _event: self.unbind_all("<MouseWheel>"))
         self._refresh_output_dirs()
         return page
 
     def _output_root(self) -> Path:
         return Path(tempfile.gettempdir()) / "meme-cli-output"
+
+    def _on_output_mousewheel(self, event) -> None:
+        if self._output_canvas is not None and getattr(event, "delta", 0):
+            self._output_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _refresh_output_dirs(self) -> None:
         if self._output_list_body is None:
@@ -593,22 +609,41 @@ class MemeGui(BaseTk):
         return panel
 
     def _sidebar_button(self, parent: tk.Misc, text: str, command, *, active: bool = True) -> tk.Button:
-        return tk.Button(
+        button = tk.Button(
             parent,
             text=text,
             command=command,
             bg=PINK if active else SIDEBAR_BG,
             fg=TEXT,
-            activebackground=PINK_SOFT if not active else PINK,
+            activebackground=PINK if active else PINK_SOFT,
             activeforeground=TEXT,
             relief="flat",
             bd=0,
-            padx=18,
-            pady=14,
-            anchor="w",
+            padx=16,
+            pady=9,
+            anchor="center",
             font=("Microsoft YaHei UI", 11, "bold"),
             cursor="hand2",
         )
+        self._style_sidebar_bubble(button, active)
+        button.bind("<Enter>", lambda _event, b=button: self._hover_sidebar_bubble(b, True))
+        button.bind("<Leave>", lambda _event, b=button: self._hover_sidebar_bubble(b, False))
+        return button
+
+    def _style_sidebar_bubble(self, button: tk.Button, active: bool) -> None:
+        button.configure(
+            bg=PINK if active else CARD,
+            activebackground=PINK if active else PINK_SOFT,
+            highlightthickness=2,
+            highlightbackground=PINK if active else LINE,
+            highlightcolor=PINK,
+        )
+
+    def _hover_sidebar_bubble(self, button: tk.Button, hovering: bool) -> None:
+        active = button.cget("bg") == PINK
+        if active:
+            return
+        button.configure(bg=PINK_SOFT if hovering else CARD, highlightbackground=PINK if hovering else LINE)
 
     def _small_button(self, parent: tk.Misc, text: str, command, *, bg: str) -> tk.Button:
         return tk.Button(
@@ -698,7 +733,7 @@ class MemeGui(BaseTk):
             else:
                 frame.pack_forget()
         for key, button in self._nav_buttons.items():
-            button.configure(bg=PINK if key == mode else SIDEBAR_BG)
+            self._style_sidebar_bubble(button, key == mode)
         if mode == "split":
             self._hero_title.configure(text="九宫格切图器")
             self._hero_sub.configure(text="拖入拼图或粘贴图片，选宫格，点开始。结果会自动打开。")
