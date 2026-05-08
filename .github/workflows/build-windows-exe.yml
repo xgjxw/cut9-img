@@ -40,13 +40,14 @@ jobs:
       - name: Rename EXE
         shell: powershell
         run: |
-          Copy-Item -LiteralPath .\dist\meme-gui.exe -Destination .\dist\九宫格切图器.exe -Force
-          Get-Item -LiteralPath .\dist\九宫格切图器.exe
-          Get-FileHash -LiteralPath .\dist\九宫格切图器.exe -Algorithm SHA256
+          python -c "from pathlib import Path; import shutil; target = Path('dist') / '\u4e5d\u5bab\u683c\u5207\u56fe\u5668.exe'; shutil.copyfile(Path('dist') / 'meme-gui.exe', target); print(target)"
+          Remove-Item -LiteralPath .\dist\meme-gui.exe -Force
+          Get-ChildItem -LiteralPath .\dist
+          Get-FileHash -LiteralPath (Get-ChildItem .\dist\*.exe | Select-Object -First 1).FullName -Algorithm SHA256
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
         with:
           name: cut9-img-windows-exe
-          path: dist/九宫格切图器.exe
+          path: dist/*.exe
           if-no-files-found: error
