@@ -1,0 +1,908 @@
+from __future__ import annotations
+
+import argparse
+import io
+import os
+import sys
+import tempfile
+import threading
+import time
+import traceback
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+from tkinter.scrolledtext import ScrolledText
+
+from PIL import Image, ImageGrab, ImageTk
+
+from . import __version__
+from .cli import SUPPORTED_EXTS, parse_max_bytes, parse_size, run_convert, run_split_sheet
+
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+
+    BaseTk = TkinterDnD.Tk
+    DND_READY = True
+except Exception:
+    DND_FILES = None
+    BaseTk = tk.Tk
+    DND_READY = False
+
+
+BG = "#FCFAF8"
+SIDEBAR_BG = "#F7F2F5"
+CARD = "#FFFFFF"
+LINE = "#E7DEE7"
+TEXT = "#4B3A45"
+TEXT_SOFT = "#8B7A86"
+PINK = "#F5A8C1"
+PINK_SOFT = "#FDE7EF"
+GREEN = "#BDF0C9"
+GREEN_TEXT = "#277A4A"
+YELLOW = "#FFE08A"
+YELLOW_SOFT = "#FFF4CA"
+BLUE_SOFT = "#ECF7FF"
+LAVENDER = "#F4F0FF"
+MINT = "#EEF9F0"
+PILL_BG = "#EAF8ED"
+
+
+def resource_path(relative: str) -> Path:
+    if hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / relative
+    return Path(__file__).resolve().parents[1] / relative
+
+
+def make_card(master: tk.Misc, bg: str = CARD, border: str = LINE, *, padx: int = 18, pady: int = 18) -> tuple[tk.Frame, tk.Frame]:
+    outer = tk.Frame(master, bg=bg, highlightthickness=1, highlightbackground=border, bd=0)
+    inner = tk.Frame(outer, bg=bg, padx=padx, pady=pady)
+    inner.pack(fill="both", expand=True)
+    return outer, inner
+
+
+class TogglePanel(tk.Frame):
+    def __init__(self, master: tk.Misc, title: str, *, bg: str = BG) -> None:
+        super().__init__(master, bg=bg)
+        self._title = title
+        self._open = False
+        self._bg = bg
+        self.button = tk.Button(
+            self,
+            text=f"{title}  +",
+            command=self.toggle,
+            bg=bg,
+            fg=TEXT_SOFT,
+            activebackground=bg,
+            activeforeground=TEXT,
+            relief="flat",
+            bd=0,
+            anchor="w",
+            cursor="hand2",
+            font=("Microsoft YaHei UI", 10, "bold"),
+        )
+        self.button.pack(anchor="w")
+        self.card, self.body = make_card(self, bg=LAVENDER, border=LAVENDER, padx=16, pady=14)
+
+    def toggle(self) -> None:
+        self._open = not self._open
+        self.button.configure(text=f"{self._title}  {'-' if self._open else '+'}")
+        if self._open:
+            self.card.pack(fill="x", pady=(8, 0))
+        else:
+            self.card.pack_forget()
+
+
+class MemeGui(BaseTk):
+    def __init__(self) -> None:
+        super().__init__()
+        self.title("九宫格切图器")
+        self.geometry("1160x820")
+        self.minsize(1040, 740)
+        self.configure(bg=BG)
+
+        self._running = False
+        self._mode = "convert"
+        self._toast_reset = None
+        self._preview_refs: dict[str, ImageTk.PhotoImage] = {}
+        self._input_views: dict[str, dict[str, tk.Widget]] = {}
+        self._log_widgets: list[ScrolledText] = []
+        self._last_output_file: Path | None = None
+        self._nav_buttons: dict[str, tk.Button] = {}
+
+        self.convert_vars = {
+            "input": tk.StringVar(),
+            "output": tk.StringVar(),
+            "format": tk.StringVar(value="gif"),
+            "size": tk.StringVar(value="200"),
+            "mode": tk.StringVar(value="2"),
+            "max_bytes": tk.StringVar(value="524288"),
+            "keep_gif": tk.BooleanVar(value=False),
+            "dedupe": tk.BooleanVar(value=True),
+            "wechat_safe": tk.BooleanVar(value=True),
+            "manifest_csv": tk.BooleanVar(value=True),
+        }
+        self.split_vars = {
+            "input": tk.StringVar(),
+            "output": tk.StringVar(),
+            "rows": tk.StringVar(value="3"),
+            "cols": tk.StringVar(value="3"),
+            "size": tk.StringVar(value="200"),
+            "format": tk.StringVar(value="gif"),
+            "mode": tk.StringVar(value="2"),
+            "search_ratio": tk.StringVar(value="0.18"),
+            "trim_pad": tk.StringVar(value="8"),
+            "bg_tolerance": tk.StringVar(value="18"),
+            "white_threshold": tk.StringVar(value="245"),
+            "transparent_bg": tk.BooleanVar(value=True),
+        }
+
+        self._setup_icon()
+        self._setup_style()
+        self._build_ui()
+        self._switch_mode("convert")
+        self.bind_all("<Control-v>", self._handle_global_paste, add=True)
+
+    def _setup_icon(self) -> None:
+        icon_path = resource_path("assets/app_icon.ico")
+        if icon_path.exists():
+            try:
+                self.iconbitmap(default=str(icon_path))
+            except Exception:
+                pass
+
+    def _setup_style(self) -> None:
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.configure("Cute.TCombobox", padding=6)
+
+    def _build_ui(self) -> None:
+        root = tk.Frame(self, bg=BG)
+        root.pack(fill="both", expand=True)
+        self._build_sidebar(root)
+        self._build_main(root)
+
+    def _build_sidebar(self, root: tk.Frame) -> None:
+        bar = tk.Frame(root, bg=SIDEBAR_BG, width=208)
+        bar.pack(side="left", fill="y")
+        bar.pack_propagate(False)
+
+        head = tk.Frame(bar, bg=SIDEBAR_BG, padx=22, pady=26)
+        head.pack(fill="x")
+        tk.Label(head, text="表情包工坊", bg=SIDEBAR_BG, fg=TEXT, font=("Microsoft YaHei UI", 18, "bold")).pack(anchor="w")
+        tk.Label(head, text="LOCAL MEME TOOL", bg=SIDEBAR_BG, fg=TEXT_SOFT, font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(2, 0))
+
+        nav = tk.Frame(bar, bg=SIDEBAR_BG, padx=18, pady=10)
+        nav.pack(fill="x")
+        self._nav_buttons["convert"] = self._sidebar_button(nav, "制作器", lambda: self._switch_mode("convert"))
+        self._nav_buttons["split"] = self._sidebar_button(nav, "切图器", lambda: self._switch_mode("split"))
+        self._nav_buttons["clear"] = self._sidebar_button(nav, "清空当前", lambda: self._clear_current(self._mode), active=False)
+        self._nav_buttons["convert"].pack(fill="x", pady=(0, 10))
+        self._nav_buttons["split"].pack(fill="x", pady=(0, 10))
+        self._nav_buttons["clear"].pack(fill="x", pady=(18, 0))
+
+        footer = tk.Frame(bar, bg=SIDEBAR_BG, padx=18, pady=18)
+        footer.pack(side="bottom", fill="x")
+        badge = tk.Frame(footer, bg=CARD, padx=14, pady=12, highlightthickness=1, highlightbackground=LINE)
+        badge.pack(fill="x")
+        avatar = tk.Canvas(badge, width=40, height=40, bg=CARD, highlightthickness=0)
+        avatar.pack(side="left")
+        avatar.create_oval(2, 2, 38, 38, fill=PINK, outline="")
+        avatar.create_text(20, 20, text="我", fill="white", font=("Microsoft YaHei UI", 10, "bold"))
+        meta = tk.Frame(badge, bg=CARD)
+        meta.pack(side="left", padx=10)
+        tk.Label(meta, text="当前用户", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 10, "bold")).pack(anchor="w")
+        tk.Label(meta, text="本地模式", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 8)).pack(anchor="w")
+
+    def _build_main(self, root: tk.Frame) -> None:
+        main = tk.Frame(root, bg=BG, padx=28, pady=22)
+        main.pack(side="left", fill="both", expand=True)
+        self.main = main
+
+        header = tk.Frame(main, bg=BG)
+        header.pack(fill="x", pady=(0, 18))
+        title_box = tk.Frame(header, bg=BG)
+        title_box.pack(side="left", fill="x", expand=True)
+        self._hero_title = tk.Label(title_box, text="", bg=BG, fg=TEXT, font=("Microsoft YaHei UI", 22, "bold"))
+        self._hero_title.pack(anchor="w")
+        self._hero_sub = tk.Label(title_box, text="", bg=BG, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 10))
+        self._hero_sub.pack(anchor="w", pady=(5, 0))
+
+        self._toast_outer, toast_body = make_card(header, bg=PILL_BG, border=PILL_BG, padx=18, pady=10)
+        self._toast_outer.pack(side="right", anchor="ne")
+        self._toast_label = tk.Label(toast_body, text="", bg=PILL_BG, fg=GREEN_TEXT, font=("Microsoft YaHei UI", 10, "bold"))
+        self._toast_label.pack()
+
+        scroll_wrap = tk.Frame(main, bg=BG)
+        scroll_wrap.pack(fill="both", expand=True)
+        self.page_canvas = tk.Canvas(scroll_wrap, bg=BG, highlightthickness=0, bd=0)
+        page_scroll = tk.Scrollbar(scroll_wrap, orient="vertical", command=self.page_canvas.yview)
+        self.page_canvas.configure(yscrollcommand=page_scroll.set)
+        self.page_canvas.pack(side="left", fill="both", expand=True)
+        self.page_host = tk.Frame(self.page_canvas, bg=BG)
+        self._page_window = self.page_canvas.create_window((0, 0), window=self.page_host, anchor="nw")
+        self.page_host.bind("<Configure>", lambda _event: self.page_canvas.configure(scrollregion=self.page_canvas.bbox("all")))
+        self.page_canvas.bind("<Configure>", lambda event: self.page_canvas.itemconfigure(self._page_window, width=event.width))
+        self.page_canvas.bind_all("<MouseWheel>", self._on_mousewheel, add=True)
+        self.pages = {
+            "convert": self._build_convert_page(),
+            "split": self._build_split_page(),
+        }
+
+    def _build_convert_page(self) -> tk.Frame:
+        page = tk.Frame(self.page_host, bg=BG)
+        self._build_drop_zone(
+            page,
+            mode="convert",
+            title="导入图片",
+            subtitle="拖图、粘贴、点选，把图片变成更适合发送的格式",
+            allow_dir=False,
+            browse_text="选择图片",
+            action_text="开始转换",
+            action_command=self.start_convert,
+        ).pack(fill="x", pady=(0, 14))
+        self._build_convert_options(page).pack(fill="x")
+        return page
+
+    def _build_split_page(self) -> tk.Frame:
+        page = tk.Frame(self.page_host, bg=BG)
+        self._build_drop_zone(
+            page,
+            mode="split",
+            title="导入拼图",
+            subtitle="拖入拼图或粘贴图片",
+            allow_dir=False,
+            browse_text="选择拼图",
+            action_text="开始切图",
+            action_command=self.start_split,
+        ).pack(fill="x", pady=(0, 14))
+        self._build_split_options(page).pack(fill="x")
+        return page
+
+    def _build_drop_zone(
+        self,
+        parent: tk.Frame,
+        *,
+        mode: str,
+        title: str,
+        subtitle: str,
+        allow_dir: bool,
+        browse_text: str,
+        action_text: str,
+        action_command,
+    ) -> tk.Frame:
+        wrap = tk.Frame(parent, bg=CARD, highlightthickness=1, highlightbackground=LINE, padx=24, pady=22)
+        wrap.grid_columnconfigure(0, weight=1)
+
+        tk.Label(wrap, text=title, bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 18, "bold")).grid(row=0, column=0, pady=(0, 14))
+
+        preview_shell = tk.Frame(wrap, bg="#FAFAFC", highlightthickness=1, highlightbackground=LINE, width=190, height=190)
+        preview_shell.grid(row=1, column=0)
+        preview_shell.pack_propagate(False)
+        preview = tk.Label(preview_shell, bg="#FAFAFC", fg=TEXT_SOFT, text="点击选择图片\n或拖拽 / Ctrl+V 粘贴", justify="center", font=("Microsoft YaHei UI", 11))
+        preview.pack(fill="both", expand=True)
+
+        hint = "支持拖拽" if DND_READY else "当前环境不支持系统拖拽，可用 Ctrl+V"
+        info = tk.Label(wrap, bg=CARD, fg=TEXT_SOFT, text=hint, justify="center", font=("Microsoft YaHei UI", 9), wraplength=420)
+        info.grid(row=2, column=0, pady=(8, 0))
+
+        action = tk.Frame(wrap, bg=CARD)
+        action.grid(row=3, column=0, pady=(12, 0))
+        self._small_button(action, browse_text, lambda: self._choose_input_file(mode), bg=PINK_SOFT).pack(side="left", padx=(0, 10))
+        self._small_button(action, action_text, action_command, bg=GREEN).pack(side="left")
+
+        self._input_views[mode] = {"preview": preview, "info": info}
+        preview_shell.bind("<Button-1>", lambda _event: self._choose_input_file(mode))
+        preview.bind("<Button-1>", lambda _event: self._choose_input_file(mode))
+        for widget in (wrap, preview_shell, preview):
+            self._bind_drop(widget, mode, allow_dir)
+        return wrap
+
+    def _draw_drop_bg(self, canvas: tk.Canvas) -> None:
+        canvas.create_rectangle(0, 0, 4000, 4000, fill=BG, outline="")
+        canvas.create_oval(56, 46, 132, 122, fill="#FFFFFF", outline="")
+        canvas.create_oval(856, 46, 932, 122, fill="#FFFFFF", outline="")
+        canvas.create_oval(772, 214, 876, 318, fill="#FFFFFF", outline="")
+
+    def _build_primary_action(self, parent: tk.Frame, text: str, command) -> tk.Frame:
+        wrap = tk.Frame(parent, bg=BG)
+        button = tk.Button(
+            wrap,
+            text=text,
+            command=command,
+            bg=GREEN,
+            fg=GREEN_TEXT,
+            activebackground=GREEN,
+            activeforeground=GREEN_TEXT,
+            relief="flat",
+            bd=0,
+            padx=46,
+            pady=12,
+            font=("Microsoft YaHei UI", 14, "bold"),
+            cursor="hand2",
+        )
+        button.pack()
+        return wrap
+
+    def _build_output_card(self, parent: tk.Frame, variable: tk.StringVar) -> tk.Frame:
+        outer, body = make_card(parent, bg=CARD, border=LINE, padx=18, pady=13)
+        tk.Label(body, text="输出目录", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).grid(row=0, column=0, sticky="w")
+        tk.Label(body, text="默认会跟随输入路径，也可以手动指定。", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).grid(row=1, column=0, sticky="w", pady=(4, 10))
+        body.grid_columnconfigure(0, weight=1)
+        row = tk.Frame(body, bg=CARD)
+        row.grid(row=2, column=0, sticky="ew")
+        entry = tk.Entry(row, textvariable=variable, relief="flat", bd=0, bg=MINT, fg=TEXT, font=("Microsoft YaHei UI", 10))
+        entry.pack(side="left", fill="x", expand=True, ipady=9)
+        self._small_button(row, "选目录", lambda: self._choose_output_dir(variable), bg=YELLOW_SOFT).pack(side="left", padx=8)
+        self._small_button(row, "打开", lambda: self._open_dir(variable.get()), bg=SIDEBAR_BG).pack(side="left")
+        return outer
+
+    def _build_convert_options(self, parent: tk.Frame) -> tk.Frame:
+        row = tk.Frame(parent, bg=BG)
+        row.grid_columnconfigure(0, weight=1, uniform="convert")
+        row.grid_columnconfigure(1, weight=1, uniform="convert")
+
+        left = self._option_panel(row, "输出格式", "格式 / 调色模式", bg=PINK_SOFT)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        self._chip_group(left.inner, self.convert_vars["format"], [("GIF", "gif"), ("PNG", "png")]).pack(anchor="w", pady=(14, 0))
+        tk.Label(left.inner, text="转换风格", bg=PINK_SOFT, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(14, 6))
+        self._chip_group(left.inner, self.convert_vars["mode"], [("模式 1", "1"), ("模式 2", "2")]).pack(anchor="w")
+
+        right = self._option_panel(row, "输出尺寸", "尺寸 / 微信兼容", bg=YELLOW_SOFT)
+        right.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        self._chip_group(right.inner, self.convert_vars["size"], [("原图", "raw"), ("小", "160"), ("中", "200"), ("大", "240")]).pack(anchor="w", pady=(14, 0))
+        tk.Checkbutton(
+            right.inner,
+            text="微信稳妥模式",
+            variable=self.convert_vars["wechat_safe"],
+            bg=YELLOW_SOFT,
+            fg=TEXT,
+            activebackground=YELLOW_SOFT,
+            selectcolor=YELLOW_SOFT,
+            font=("Microsoft YaHei UI", 10),
+        ).pack(anchor="w", pady=(16, 0))
+        return row
+
+    def _build_split_options(self, parent: tk.Frame) -> tk.Frame:
+        row = tk.Frame(parent, bg=BG)
+        row.grid_columnconfigure(0, weight=1, uniform="split")
+        row.grid_columnconfigure(1, weight=1, uniform="split")
+
+        left = self._option_panel(row, "网格设置", "行列 / 输出格式", bg=PINK_SOFT)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        preset = tk.Frame(left.inner, bg=PINK_SOFT)
+        preset.pack(anchor="w", pady=(14, 0))
+        self._small_button(preset, "3 x 3", lambda: self._set_grid_preset(3, 3), bg=CARD).pack(side="left", padx=(0, 8))
+        self._small_button(preset, "4 x 4", lambda: self._set_grid_preset(4, 4), bg=CARD).pack(side="left", padx=(0, 8))
+        self._small_button(preset, "5 x 5", lambda: self._set_grid_preset(5, 5), bg=CARD).pack(side="left")
+        rc = tk.Frame(left.inner, bg=PINK_SOFT)
+        rc.pack(anchor="w", pady=(14, 0))
+        tk.Label(rc, text="行", bg=PINK_SOFT, fg=TEXT, font=("Microsoft YaHei UI", 10)).pack(side="left")
+        tk.Spinbox(rc, from_=1, to=12, textvariable=self.split_vars["rows"], width=4).pack(side="left", padx=(6, 16))
+        tk.Label(rc, text="列", bg=PINK_SOFT, fg=TEXT, font=("Microsoft YaHei UI", 10)).pack(side="left")
+        tk.Spinbox(rc, from_=1, to=12, textvariable=self.split_vars["cols"], width=4).pack(side="left", padx=(6, 0))
+        tk.Label(left.inner, text="输出格式", bg=PINK_SOFT, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(14, 6))
+        self._chip_group(left.inner, self.split_vars["format"], [("GIF", "gif"), ("PNG", "png")]).pack(anchor="w")
+
+        right = self._option_panel(row, "输出尺寸", "大小 / 背景", bg=YELLOW_SOFT)
+        right.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        self._chip_group(right.inner, self.split_vars["size"], [("原图", "raw"), ("小", "160"), ("中", "200"), ("大", "240")]).pack(anchor="w", pady=(14, 0))
+        tk.Checkbutton(
+            right.inner,
+            text="背景转透明",
+            variable=self.split_vars["transparent_bg"],
+            bg=YELLOW_SOFT,
+            fg=TEXT,
+            activebackground=YELLOW_SOFT,
+            selectcolor=YELLOW_SOFT,
+            font=("Microsoft YaHei UI", 10),
+        ).pack(anchor="w", pady=(16, 0))
+        return row
+
+    def _option_panel(self, parent: tk.Frame, title: str, subtitle: str, *, bg: str) -> tk.Frame:
+        outer = tk.Frame(parent, bg=bg, highlightthickness=1, highlightbackground=bg, bd=0)
+        outer.inner = tk.Frame(outer, bg=bg, padx=18, pady=14)  # type: ignore[attr-defined]
+        outer.inner.pack(fill="both", expand=True)  # type: ignore[attr-defined]
+        head = tk.Frame(outer.inner, bg=bg)  # type: ignore[attr-defined]
+        head.pack(fill="x")
+        tk.Label(head, text=title, bg=bg, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).pack(side="left")
+        tk.Label(head, text=subtitle, bg=bg, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).pack(side="right")
+        return outer
+
+    def _build_convert_advanced(self, parent: tk.Frame) -> None:
+        tk.Label(parent, text="体积上限(bytes)", bg=LAVENDER, fg=TEXT, font=("Microsoft YaHei UI", 10)).grid(row=0, column=0, sticky="w")
+        tk.Entry(parent, textvariable=self.convert_vars["max_bytes"], relief="flat", bd=0, bg=CARD, fg=TEXT, width=16).grid(row=0, column=1, sticky="w", padx=(8, 20), ipady=6)
+        tk.Checkbutton(parent, text="源 GIF 直拷", variable=self.convert_vars["keep_gif"], bg=LAVENDER, fg=TEXT, activebackground=LAVENDER, selectcolor=LAVENDER, font=("Microsoft YaHei UI", 10)).grid(row=1, column=0, sticky="w", pady=(12, 0))
+        tk.Checkbutton(parent, text="去重", variable=self.convert_vars["dedupe"], bg=LAVENDER, fg=TEXT, activebackground=LAVENDER, selectcolor=LAVENDER, font=("Microsoft YaHei UI", 10)).grid(row=1, column=1, sticky="w", pady=(12, 0))
+        tk.Checkbutton(parent, text="导出 manifest.csv", variable=self.convert_vars["manifest_csv"], bg=LAVENDER, fg=TEXT, activebackground=LAVENDER, selectcolor=LAVENDER, font=("Microsoft YaHei UI", 10)).grid(row=1, column=2, sticky="w", pady=(12, 0))
+
+    def _build_split_advanced(self, parent: tk.Frame) -> None:
+        fields = [
+            ("search ratio", self.split_vars["search_ratio"]),
+            ("trim pad", self.split_vars["trim_pad"]),
+            ("bg tolerance", self.split_vars["bg_tolerance"]),
+            ("white threshold", self.split_vars["white_threshold"]),
+        ]
+        for idx, (label, variable) in enumerate(fields):
+            tk.Label(parent, text=label, bg=LAVENDER, fg=TEXT, font=("Microsoft YaHei UI", 10)).grid(row=idx // 2, column=(idx % 2) * 2, sticky="w", pady=(0, 10))
+            tk.Entry(parent, textvariable=variable, relief="flat", bd=0, bg=CARD, fg=TEXT, width=12).grid(row=idx // 2, column=(idx % 2) * 2 + 1, sticky="w", padx=(8, 20), pady=(0, 10), ipady=6)
+
+    def _build_toolbox(self, parent: tk.Frame) -> tk.Frame:
+        outer, body = make_card(parent, bg=CARD, border=LINE, padx=18, pady=14)
+        tk.Label(body, text="工具箱", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w")
+        grid = tk.Frame(body, bg=CARD)
+        grid.pack(fill="x", pady=(12, 0))
+        for idx in range(3):
+            grid.grid_columnconfigure(idx, weight=1)
+        self._tool_button(grid, "粘贴 / 导入", lambda: self._paste_clipboard(self._mode, True)).grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self._tool_button(grid, "打开输出目录", lambda: self._open_dir(self._current_output_var().get())).grid(row=0, column=1, sticky="ew", padx=8)
+        self._tool_button(grid, "打开当前文件", self._open_last_output).grid(row=0, column=2, sticky="ew", padx=(8, 0))
+        self._tool_button(grid, "清空状态", lambda: self._clear_current(self._mode)).grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=(10, 0))
+        self._tool_button(grid, "切换高级设置", self._toggle_advanced_current).grid(row=1, column=1, sticky="ew", padx=8, pady=(10, 0))
+        self._tool_button(grid, "查看日志", self._toggle_logs).grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(10, 0))
+        self._recent_label = tk.Label(body, text="最近结果：还没有输出文件", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9))
+        self._recent_label.pack(anchor="w", pady=(12, 0))
+        return outer
+
+    def _build_log_panel(self, parent: tk.Frame) -> tk.Frame:
+        panel = TogglePanel(parent, "运行日志")
+        log = ScrolledText(panel.body, height=7, wrap="word", font=("Consolas", 10), relief="flat", bd=0, bg=CARD, fg=TEXT)
+        log.pack(fill="both", expand=True)
+        log.configure(state="disabled")
+        self._log_widgets.append(log)
+        row = tk.Frame(panel.body, bg=LAVENDER)
+        row.pack(fill="x", pady=(8, 0))
+        self._small_button(row, "清空日志", self._clear_log, bg=CARD).pack(side="left")
+        return panel
+
+    def _sidebar_button(self, parent: tk.Misc, text: str, command, *, active: bool = True) -> tk.Button:
+        return tk.Button(
+            parent,
+            text=text,
+            command=command,
+            bg=PINK if active and text == "制作器" else SIDEBAR_BG,
+            fg=TEXT,
+            activebackground=PINK_SOFT if not active else PINK,
+            activeforeground=TEXT,
+            relief="flat",
+            bd=0,
+            padx=18,
+            pady=14,
+            anchor="w",
+            font=("Microsoft YaHei UI", 11, "bold"),
+            cursor="hand2",
+        )
+
+    def _small_button(self, parent: tk.Misc, text: str, command, *, bg: str) -> tk.Button:
+        return tk.Button(
+            parent,
+            text=text,
+            command=command,
+            bg=bg,
+            fg=TEXT,
+            activebackground=bg,
+            activeforeground=TEXT,
+            relief="flat",
+            bd=0,
+            padx=14,
+            pady=8,
+            font=("Microsoft YaHei UI", 10, "bold"),
+            cursor="hand2",
+        )
+
+    def _tool_button(self, parent: tk.Misc, text: str, command) -> tk.Button:
+        return tk.Button(
+            parent,
+            text=text,
+            command=command,
+            bg="#FBFBFC",
+            fg=TEXT,
+            activebackground="#FBFBFC",
+            activeforeground=TEXT,
+            relief="flat",
+            bd=0,
+            padx=12,
+            pady=10,
+            font=("Microsoft YaHei UI", 10),
+            cursor="hand2",
+        )
+
+    def _chip_group(self, parent: tk.Misc, variable: tk.StringVar, options: list[tuple[str, str]]) -> tk.Frame:
+        row = tk.Frame(parent, bg=parent.cget("bg"))
+        buttons: list[tuple[tk.Button, str]] = []
+
+        def refresh(*_args) -> None:
+            current = variable.get()
+            for button, value in buttons:
+                if value == current:
+                    button.configure(bg=PINK, fg=TEXT, activebackground=PINK)
+                else:
+                    button.configure(bg=CARD, fg=TEXT, activebackground=CARD)
+
+        for label, value in options:
+            button = tk.Button(
+                row,
+                text=label,
+                bg=CARD,
+                fg=TEXT,
+                activebackground=CARD,
+                activeforeground=TEXT,
+                relief="flat",
+                bd=0,
+                padx=18,
+                pady=10,
+                font=("Microsoft YaHei UI", 10, "bold"),
+                command=lambda selected=value: variable.set(selected),
+                cursor="hand2",
+            )
+            button.pack(side="left", padx=(0, 10))
+            buttons.append((button, value))
+        variable.trace_add("write", refresh)
+        refresh()
+        return row
+
+    def _current_output_var(self) -> tk.StringVar:
+        return self.convert_vars["output"] if self._mode == "convert" else self.split_vars["output"]
+
+    def _vars(self, mode: str) -> dict[str, tk.Variable]:
+        return self.convert_vars if mode == "convert" else self.split_vars
+
+    def _on_mousewheel(self, event) -> None:
+        if getattr(event, "delta", 0):
+            self.page_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _switch_mode(self, mode: str) -> None:
+        self._mode = mode
+        for key, frame in self.pages.items():
+            if key == mode:
+                frame.pack(fill="both", expand=True)
+            else:
+                frame.pack_forget()
+        for key, button in self._nav_buttons.items():
+            if key == mode:
+                button.configure(bg=PINK, fg=TEXT)
+            elif key in {"open", "clear"}:
+                button.configure(bg=SIDEBAR_BG, fg=TEXT)
+            else:
+                button.configure(bg=SIDEBAR_BG, fg=TEXT)
+        if mode == "convert":
+            self._hero_title.configure(text="开始施展魔法！")
+            self._hero_sub.configure(text="拖图、压缩、导出，把图片变成更适合发送的格式")
+            self._set_toast("已准备好，可以开始批量转换。")
+        else:
+            self._hero_title.configure(text="开始切图吧！")
+            self._hero_sub.configure(text="导入拼图、识别网格、切开单图，适合做微信表情包")
+            self._set_toast("切图模式已就绪，推荐先用 3 x 3 或 4 x 4。")
+        self.after_idle(lambda: self.page_canvas.configure(scrollregion=self.page_canvas.bbox("all")))
+
+    def _set_toast(self, text: str) -> None:
+        self._toast_label.configure(text=text)
+        if self._toast_reset is not None:
+            self.after_cancel(self._toast_reset)
+            self._toast_reset = None
+
+    def _flash_toast(self, text: str, *, reset: bool = True) -> None:
+        self._set_toast(text)
+        if reset:
+            self._toast_reset = self.after(3000, lambda: self._switch_mode(self._mode))
+
+    def _toggle_advanced_current(self) -> None:
+        if self._mode == "convert":
+            self.convert_advanced.toggle()
+        else:
+            self.split_advanced.toggle()
+
+    def _toggle_logs(self) -> None:
+        panel = self.convert_log_panel if self._mode == "convert" else self.split_log_panel
+        panel.toggle()
+
+    def _bind_drop(self, widget: tk.Widget, mode: str, allow_dir: bool) -> None:
+        if not DND_READY:
+            return
+        try:
+            widget.drop_target_register(DND_FILES)
+            widget.dnd_bind("<<Drop>>", lambda event: self._handle_drop(event.data, mode, allow_dir))
+        except Exception:
+            pass
+
+    def _handle_drop(self, data: str, mode: str, allow_dir: bool) -> None:
+        try:
+            items = self.tk.splitlist(data)
+        except Exception:
+            items = [data]
+        for raw in items:
+            path = Path(raw.strip("{}")).expanduser()
+            if not path.exists():
+                continue
+            if path.is_dir() and allow_dir:
+                self._set_input(mode, path)
+                self._append_log(f"[drop] {mode} <- {path}")
+                self._flash_toast("已接收拖拽内容。")
+                return
+            if path.is_file() and path.suffix.lower() in SUPPORTED_EXTS:
+                self._set_input(mode, path)
+                self._append_log(f"[drop] {mode} <- {path}")
+                self._flash_toast("已接收拖拽内容。")
+                return
+
+    def _choose_input_file_or_dir(self, mode: str) -> None:
+        path = filedialog.askopenfilename(
+            title="选择图片",
+            filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp"), ("All files", "*.*")],
+        )
+        if not path:
+            path = filedialog.askdirectory(title="选择图片文件夹")
+        if path:
+            self._set_input(mode, Path(path))
+
+    def _choose_input_file(self, mode: str) -> None:
+        path = filedialog.askopenfilename(
+            title="选择图片" if mode == "convert" else "选择拼图",
+            filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp"), ("All files", "*.*")],
+        )
+        if path:
+            self._set_input(mode, Path(path))
+
+    def _choose_output_dir(self, variable: tk.StringVar) -> None:
+        path = filedialog.askdirectory(title="选择输出目录")
+        if path:
+            variable.set(path)
+
+    def _clear_current(self, mode: str) -> None:
+        self._vars(mode)["input"].set("")
+        self._vars(mode)["output"].set("")
+        view = self._input_views.get(mode)
+        if view:
+            view["preview"].configure(image="", text="点击选择图片\n或拖拽 / Ctrl+V 粘贴")
+            hint = "支持拖拽" if DND_READY else "当前环境不支持系统拖拽，可用 Ctrl+V"
+            view["info"].configure(text=hint)
+        self._preview_refs.pop(mode, None)
+        self._flash_toast("已清空当前状态，可以重新导入图片。")
+
+    def _set_input(self, mode: str, path: Path) -> None:
+        vars_map = self._vars(mode)
+        vars_map["input"].set(str(path))
+        vars_map["output"].set(str(self._suggest_output(mode, path)))
+        self._update_preview(mode, path)
+
+    def _suggest_output(self, mode: str, path: Path) -> Path:
+        stem = path.name if path.is_dir() else path.stem
+        suffix = "gif" if mode == "convert" else "split"
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        return Path(tempfile.gettempdir()) / "meme-cli-output" / f"{stem}_{suffix}_{stamp}"
+
+    def _update_preview(self, mode: str, path: Path) -> None:
+        view = self._input_views[mode]
+        preview: tk.Label = view["preview"]  # type: ignore[assignment]
+        info: tk.Label = view["info"]  # type: ignore[assignment]
+
+        if path.is_dir():
+            count = len([p for p in path.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS])
+            preview.configure(image="", text="文件夹")
+            info.configure(text=f"{path.name}，共 {count} 张支持图片")
+            self._preview_refs.pop(mode, None)
+            return
+
+        try:
+            with Image.open(path) as image:
+                thumb = image.convert("RGBA")
+                thumb.thumbnail((148, 148), Image.Resampling.LANCZOS)
+                frames = getattr(image, "n_frames", 1)
+                width, height = image.size
+        except Exception as exc:
+            preview.configure(image="", text="预览失败")
+            info.configure(text=f"{path.name}\n{exc}")
+            self._preview_refs.pop(mode, None)
+            return
+
+        photo = ImageTk.PhotoImage(thumb)
+        preview.configure(image=photo, text="")
+        info.configure(text=f"{path.name} · {width} x {height} · {frames} 帧")
+        self._preview_refs[mode] = photo
+
+    def _handle_global_paste(self, _event) -> str | None:
+        if self._paste_clipboard(self._mode, False):
+            return "break"
+        return None
+
+    def _paste_clipboard(self, mode: str, show_message: bool) -> bool:
+        try:
+            payload = ImageGrab.grabclipboard()
+        except Exception as exc:
+            if show_message:
+                messagebox.showerror("读取剪贴板失败", str(exc))
+            return False
+
+        candidate = self._resolve_clipboard_payload(mode, payload)
+        if candidate is None:
+            if show_message:
+                messagebox.showinfo("没有可用图片", "剪贴板里没有图片或图片路径。")
+            return False
+
+        self._set_input(mode, candidate)
+        self._append_log(f"[clipboard] {mode} <- {candidate}")
+        self._flash_toast("已接收剪贴板图片。")
+        return True
+
+    def _resolve_clipboard_payload(self, mode: str, payload) -> Path | None:
+        if isinstance(payload, Image.Image):
+            return self._save_clipboard_image(payload, mode)
+        if isinstance(payload, list):
+            for item in payload:
+                path = Path(item)
+                if not path.exists():
+                    continue
+                if path.is_file() and path.suffix.lower() in SUPPORTED_EXTS:
+                    return path
+        try:
+            text = self.clipboard_get().strip()
+        except tk.TclError:
+            text = ""
+        if text:
+            path = Path(text.strip('"'))
+            if path.exists():
+                if path.is_file() and path.suffix.lower() in SUPPORTED_EXTS:
+                    return path
+        return None
+
+    def _save_clipboard_image(self, image: Image.Image, mode: str) -> Path:
+        temp_dir = Path(tempfile.gettempdir()) / "meme-cli-paste"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        target = temp_dir / f"{mode}-{time.strftime('%Y%m%d-%H%M%S')}.png"
+        image.convert("RGBA").save(target, format="PNG")
+        return target
+
+    def _set_grid_preset(self, rows: int, cols: int) -> None:
+        self.split_vars["rows"].set(str(rows))
+        self.split_vars["cols"].set(str(cols))
+        self._flash_toast(f"已切换为 {rows} x {cols} 网格。")
+
+    def _open_dir(self, value: str) -> None:
+        if not value:
+            return
+        path = Path(value)
+        if path.is_file():
+            path = path.parent
+        if not path.exists():
+            messagebox.showerror("路径不存在", str(path))
+            return
+        os.startfile(str(path))
+
+    def _open_last_output(self) -> None:
+        if self._last_output_file and self._last_output_file.exists():
+            os.startfile(str(self._last_output_file))
+            return
+        self._open_dir(self._current_output_var().get())
+
+    def _clear_log(self) -> None:
+        for widget in self._log_widgets:
+            widget.configure(state="normal")
+            widget.delete("1.0", tk.END)
+            widget.configure(state="disabled")
+
+    def _append_log(self, message: str) -> None:
+        for widget in self._log_widgets:
+            widget.configure(state="normal")
+            widget.insert(tk.END, message.rstrip() + "\n")
+            widget.see(tk.END)
+            widget.configure(state="disabled")
+
+    def _update_recent_output(self, output_dir: Path) -> None:
+        candidates = [
+            p for p in output_dir.rglob("*")
+            if p.is_file() and p.suffix.lower() in {".gif", ".png"} and p.name not in {"preview_boxes.png"}
+        ]
+        if candidates:
+            self._last_output_file = max(candidates, key=lambda p: p.stat().st_mtime)
+            if hasattr(self, "_recent_label"):
+                self._recent_label.configure(text=f"最近结果：{self._last_output_file.name}")
+        else:
+            self._last_output_file = None
+            if hasattr(self, "_recent_label"):
+                self._recent_label.configure(text=f"最近结果：{output_dir}")
+
+    def _ensure_not_running(self) -> bool:
+        if self._running:
+            messagebox.showinfo("任务执行中", "当前已有任务在运行，请等它结束。")
+            return False
+        return True
+
+    def _run_job(self, title: str, func, args: argparse.Namespace) -> None:
+        if not self._ensure_not_running():
+            return
+        self._running = True
+        self._append_log(f"== {title} ==")
+        self._flash_toast(f"{title} 已开始执行……", reset=False)
+
+        def worker() -> None:
+            buf = io.StringIO()
+            try:
+                with redirect_stdout(buf), redirect_stderr(buf):
+                    code = func(args)
+                text = buf.getvalue()
+                if text:
+                    self.after(0, lambda: self._append_log(text))
+                self.after(0, lambda: self._append_log(f"[exit] code={code}"))
+                if code == 0:
+                    out_dir = Path(args.output).expanduser().resolve()
+                    self.after(0, lambda: self._update_recent_output(out_dir))
+                    self.after(0, lambda: self._open_dir(str(out_dir)))
+                    self.after(0, lambda: self._flash_toast(f"{title} 已完成。"))
+                else:
+                    self.after(0, lambda: self._flash_toast(f"{title} 已结束，返回 code={code}。"))
+            except Exception:
+                self.after(0, lambda: self._append_log(traceback.format_exc()))
+                self.after(0, lambda: self._flash_toast("任务失败，请查看日志。", reset=False))
+            finally:
+                self.after(0, self._clear_running)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _clear_running(self) -> None:
+        self._running = False
+
+    def start_convert(self) -> None:
+        try:
+            max_bytes_raw = self.convert_vars["max_bytes"].get().strip()
+            args = argparse.Namespace(
+                input=self.convert_vars["input"].get().strip(),
+                output=self.convert_vars["output"].get().strip(),
+                size=parse_size(self.convert_vars["size"].get().strip()),
+                format=self.convert_vars["format"].get().strip(),
+                mode=int(self.convert_vars["mode"].get().strip()),
+                max_bytes=parse_max_bytes(max_bytes_raw) if max_bytes_raw else None,
+                keep_gif=bool(self.convert_vars["keep_gif"].get()),
+                dedupe=bool(self.convert_vars["dedupe"].get()),
+                wechat_safe=bool(self.convert_vars["wechat_safe"].get()),
+                manifest_csv=bool(self.convert_vars["manifest_csv"].get()),
+                dry_run=False,
+                command="convert",
+            )
+        except Exception as exc:
+            messagebox.showerror("参数错误", str(exc))
+            return
+        if not args.input:
+            messagebox.showerror("参数错误", "请先选择图片。")
+            return
+        if not args.output:
+            args.output = str(self._suggest_output("convert", Path(args.input)))
+        self._run_job("批量转换", run_convert, args)
+
+    def start_split(self) -> None:
+        try:
+            args = argparse.Namespace(
+                input=self.split_vars["input"].get().strip(),
+                output=self.split_vars["output"].get().strip(),
+                rows=int(self.split_vars["rows"].get().strip()),
+                cols=int(self.split_vars["cols"].get().strip()),
+                size=parse_size(self.split_vars["size"].get().strip()),
+                format=self.split_vars["format"].get().strip(),
+                mode=int(self.split_vars["mode"].get().strip()),
+                search_ratio=float(self.split_vars["search_ratio"].get().strip()),
+                trim_pad=int(self.split_vars["trim_pad"].get().strip()),
+                bg_tolerance=int(self.split_vars["bg_tolerance"].get().strip()),
+                white_threshold=int(self.split_vars["white_threshold"].get().strip()),
+                transparent_bg=bool(self.split_vars["transparent_bg"].get()),
+                command="split-sheet",
+            )
+        except Exception as exc:
+            messagebox.showerror("参数错误", str(exc))
+            return
+        if not args.input:
+            messagebox.showerror("参数错误", "请先选择拼图。")
+            return
+        if not args.output:
+            args.output = str(self._suggest_output("split", Path(args.input)))
+        if args.rows <= 0 or args.cols <= 0:
+            messagebox.showerror("参数错误", "行数和列数必须大于 0。")
+            return
+        self._run_job("拼图切图", run_split_sheet, args)
+
+
+def main() -> None:
+    app = MemeGui()
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    main()
