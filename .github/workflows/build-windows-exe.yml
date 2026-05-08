@@ -56,15 +56,14 @@ jobs:
           if-no-files-found: error
 
       - name: Publish latest release
-        shell: powershell
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $exe = Get-ChildItem -LiteralPath .\dist -Filter *.exe | Select-Object -First 1
-          if (-not $exe) {
-            throw "EXE not found"
-          }
-
-          gh release delete latest --yes --cleanup-tag 2>$null
-          gh release create latest $exe.FullName --title "Latest Windows EXE" --notes "Auto-built latest Windows executable."
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ github.token }}
+          tag: latest
+          name: Latest Windows EXE
+          body: Auto-built latest Windows executable.
+          artifacts: dist/*.exe
+          allowUpdates: true
+          replacesArtifacts: true
+          removeArtifacts: true
+          makeLatest: true
