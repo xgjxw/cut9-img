@@ -60,14 +60,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $ErrorActionPreference = "Stop"
           $exe = Get-ChildItem -LiteralPath .\dist -Filter *.exe | Select-Object -First 1
           if (-not $exe) {
             throw "EXE not found"
           }
 
-          gh release view latest *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload latest $exe.FullName --clobber
-          } else {
-            gh release create latest $exe.FullName --title "Latest Windows EXE" --notes "自动构建的最新版 Windows 可执行文件。"
-          }
+          gh release delete latest --yes --cleanup-tag 2>$null
+          gh release create latest $exe.FullName --title "Latest Windows EXE" --notes "Auto-built latest Windows executable."
