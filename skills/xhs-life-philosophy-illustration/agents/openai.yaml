@@ -1,0 +1,6 @@
+interface:
+  display_name: "小红书人生哲学插图"
+  short_description: "生成小红书九宫格文案、无字生图提示和组图计划"
+  default_prompt: "Use $xhs-life-philosophy-illustration to create a Xiaohongshu-style life philosophy nine-grid illustration package."
+policy:
+  allow_implicit_invocation: true

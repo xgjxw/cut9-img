@@ -16,7 +16,7 @@ from typing import Iterable
 from urllib.request import urlopen
 
 from Crypto.Cipher import AES
-from PIL import Image, ImageDraw, ImageSequence
+from PIL import Image, ImageDraw, ImageFont, ImageSequence
 
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}
 MIN_RESIZE_EDGE = 32
@@ -138,6 +138,24 @@ def gather_inputs(input_path: Path) -> list[Path]:
     return sorted(files)
 
 
+def gather_ordered_images(input_value: str) -> list[Path]:
+    input_value = input_value.strip()
+    if not input_value:
+        raise ValueError("input is empty")
+    input_path = Path(input_value).expanduser()
+    if input_path.exists():
+        return gather_inputs(input_path.resolve())
+
+    files: list[Path] = []
+    for line in input_value.splitlines():
+        path = Path(line.strip().strip('"')).expanduser()
+        if path.is_file() and path.suffix.lower() in SUPPORTED_EXTS:
+            files.append(path.resolve())
+    if not files:
+        raise FileNotFoundError(f"input not found: {input_value}")
+    return files
+
+
 def fit_size(width: int, height: int, force_size: int) -> tuple[int, int]:
     if force_size <= 0:
         return width, height
@@ -156,6 +174,315 @@ def resize_frame(frame: Image.Image, force_size: int) -> Image.Image:
     if new_size != (frame.width, frame.height):
         frame = frame.resize(new_size, Image.Resampling.LANCZOS)
     return frame
+
+
+def fit_into_square(image: Image.Image, cell_size: int, bg_rgb: tuple[int, int, int]) -> Image.Image:
+    frame = image.convert("RGBA")
+    frame.thumbnail((cell_size, cell_size), Image.Resampling.LANCZOS)
+    cell = Image.new("RGBA", (cell_size, cell_size), (*bg_rgb, 255))
+    x = (cell_size - frame.width) // 2
+    y = (cell_size - frame.height) // 2
+    cell.alpha_composite(frame, (x, y))
+    return cell
+
+
+def trim_near_white_border(image: Image.Image, *, threshold: int = 248, padding: int = 24) -> Image.Image:
+    rgba = image.convert("RGBA")
+    pixels = rgba.load()
+    left, top, right, bottom = rgba.width, rgba.height, -1, -1
+    for y in range(rgba.height):
+        for x in range(rgba.width):
+            r, g, b, a = pixels[x, y]
+            if a > 8 and not (r >= threshold and g >= threshold and b >= threshold):
+                left = min(left, x)
+                top = min(top, y)
+                right = max(right, x)
+                bottom = max(bottom, y)
+    if right < left or bottom < top:
+        return rgba
+    left = max(0, left - padding)
+    top = max(0, top - padding)
+    right = min(rgba.width - 1, right + padding)
+    bottom = min(rgba.height - 1, bottom + padding)
+    return rgba.crop((left, top, right + 1, bottom + 1))
+
+
+def fit_panel_to_width(image: Image.Image, width: int, bg_rgb: tuple[int, int, int], *, trim: bool) -> Image.Image:
+    panel = trim_near_white_border(image) if trim else image.convert("RGBA")
+    if panel.width != width:
+        height = max(1, round(panel.height * width / panel.width))
+        panel = panel.resize((width, height), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", panel.size, (*bg_rgb, 255))
+    canvas.alpha_composite(panel, (0, 0))
+    return canvas
+
+
+def parse_hex_color(value: str) -> tuple[int, int, int]:
+    raw = value.strip().lstrip("#")
+    if len(raw) != 6:
+        raise ValueError("bg color must be like #ffffff")
+    return int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
+
+
+def find_default_caption_font() -> Path | None:
+    candidates = [
+        Path(r"C:\Windows\Fonts\msyhbd.ttc"),
+        Path(r"C:\Windows\Fonts\simhei.ttf"),
+        Path(r"C:\Windows\Fonts\NotoSansSC-VF.ttf"),
+        Path(r"C:\Windows\Fonts\msyh.ttc"),
+        Path(r"C:\Windows\Fonts\simsun.ttc"),
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def resolve_caption_font(value: str | None) -> Path | None:
+    if not value or value.strip().lower() == "auto":
+        return find_default_caption_font()
+    path = Path(value).expanduser()
+    if not path.exists():
+        raise FileNotFoundError(f"caption font not found: {path}")
+    return path.resolve()
+
+
+def load_xhs_plan(path: str | None) -> dict[str, object]:
+    if not path:
+        return {}
+    plan_path = Path(path).expanduser().resolve()
+    if not plan_path.is_file():
+        raise FileNotFoundError(f"xhs plan not found: {plan_path}")
+    return json.loads(plan_path.read_text(encoding="utf-8"))
+
+
+def _caption_text_from_item(item: object) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        for key in ("caption", "text", "subtitle", "title"):
+            value = item.get(key)
+            if isinstance(value, str):
+                return value.strip()
+    return ""
+
+
+def load_caption_lines(path: str | None, plan: dict[str, object] | None = None) -> list[str]:
+    if plan:
+        captions = plan.get("captions")
+        if isinstance(captions, list):
+            return [_caption_text_from_item(item) for item in captions]
+        slices = plan.get("slices")
+        if isinstance(slices, list):
+            return [_caption_text_from_item(item) for item in slices]
+    if not path:
+        return []
+
+    caption_path = Path(path).expanduser().resolve()
+    if not caption_path.is_file():
+        raise FileNotFoundError(f"caption file not found: {caption_path}")
+    if caption_path.suffix.lower() == ".json":
+        payload = json.loads(caption_path.read_text(encoding="utf-8"))
+        if isinstance(payload, list):
+            return [_caption_text_from_item(item) for item in payload]
+        if isinstance(payload, dict):
+            return load_caption_lines(None, payload)
+        raise ValueError("caption json must be a list or object")
+    return [line.strip() for line in caption_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def wrap_caption_text(text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
+    draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    lines: list[str] = []
+    for paragraph in text.splitlines() or [""]:
+        current = ""
+        for char in paragraph:
+            candidate = current + char
+            width = draw.textbbox((0, 0), candidate, font=font)[2]
+            if width <= max_width or not current:
+                current = candidate
+            else:
+                lines.append(current)
+                current = char
+        if current:
+            lines.append(current)
+    return lines or [""]
+
+
+def fit_caption_font(
+    text: str,
+    *,
+    font_path: Path | None,
+    max_width: int,
+    max_height: int,
+    start_size: int,
+    min_size: int,
+) -> tuple[ImageFont.ImageFont, list[str], int]:
+    if start_size <= 0:
+        raise ValueError("caption font size must be > 0")
+    if min_size <= 0 or min_size > start_size:
+        raise ValueError("caption min font size must be > 0 and <= caption font size")
+
+    draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    for size in range(start_size, min_size - 1, -2):
+        font = ImageFont.truetype(str(font_path), size) if font_path else ImageFont.load_default(size=size)
+        lines = wrap_caption_text(text, font, max_width)
+        line_height = max(1, round(size * 1.22))
+        widest = max(draw.textbbox((0, 0), line, font=font)[2] for line in lines)
+        if widest <= max_width and line_height * len(lines) <= max_height:
+            return font, lines, line_height
+
+    font = ImageFont.truetype(str(font_path), min_size) if font_path else ImageFont.load_default(size=min_size)
+    return font, wrap_caption_text(text, font, max_width), max(1, round(min_size * 1.22))
+
+
+def append_caption_area(
+    panel: Image.Image,
+    caption: str,
+    *,
+    caption_height: int,
+    font_path: Path | None,
+    font_size: int,
+    min_font_size: int,
+    margin_x: int,
+    color_rgb: tuple[int, int, int],
+    bg_rgb: tuple[int, int, int],
+) -> Image.Image:
+    if caption_height <= 0 or not caption:
+        return panel.convert("RGBA")
+    if margin_x < 0:
+        raise ValueError("caption margin must be >= 0")
+
+    base = panel.convert("RGBA")
+    canvas = Image.new("RGBA", (base.width, base.height + caption_height), (*bg_rgb, 255))
+    canvas.alpha_composite(base, (0, 0))
+
+    max_width = max(1, base.width - margin_x * 2)
+    max_height = max(1, caption_height - 24)
+    font, lines, line_height = fit_caption_font(
+        caption,
+        font_path=font_path,
+        max_width=max_width,
+        max_height=max_height,
+        start_size=font_size,
+        min_size=min_font_size,
+    )
+
+    draw = ImageDraw.Draw(canvas)
+    total_height = line_height * len(lines)
+    y = base.height + max(0, (caption_height - total_height) // 2)
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        text_width = bbox[2] - bbox[0]
+        x = (base.width - text_width) // 2
+        draw.text((x, y), line, font=font, fill=(*color_rgb, 255))
+        y += line_height
+    return canvas
+
+
+def compose_xhs_vertical_pair(
+    top_path: Path,
+    bottom_path: Path | None,
+    target: Path,
+    *,
+    cell_size: int,
+    gutter: int,
+    bg_rgb: tuple[int, int, int],
+    output_format: str,
+) -> tuple[int, int]:
+    if cell_size <= 0:
+        raise ValueError("cell-size must be > 0")
+    if gutter < 0:
+        raise ValueError("gutter must be >= 0")
+
+    width = cell_size
+    height = cell_size * 2 + gutter
+    canvas = Image.new("RGBA", (width, height), (*bg_rgb, 255))
+
+    with Image.open(top_path) as top_image:
+        canvas.alpha_composite(fit_into_square(top_image, cell_size, bg_rgb), (0, 0))
+    if bottom_path is not None:
+        with Image.open(bottom_path) as bottom_image:
+            canvas.alpha_composite(fit_into_square(bottom_image, cell_size, bg_rgb), (0, cell_size + gutter))
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if output_format == "jpg":
+        canvas.convert("RGB").save(target, format="JPEG", quality=95, optimize=True)
+    else:
+        canvas.save(target, format="PNG", optimize=True)
+    return width, height
+
+
+def compose_xhs_vertical_flow(
+    top_path: Path,
+    bottom_path: Path | None,
+    target: Path,
+    *,
+    width: int,
+    gutter: int,
+    bg_rgb: tuple[int, int, int],
+    output_format: str,
+    trim: bool,
+    top_caption: str = "",
+    bottom_caption: str = "",
+    caption_height: int = 0,
+    caption_font: Path | None = None,
+    caption_font_size: int = 64,
+    caption_min_font_size: int = 28,
+    caption_margin_x: int = 80,
+    caption_color_rgb: tuple[int, int, int] = (0, 0, 0),
+) -> tuple[int, int]:
+    if width <= 0:
+        raise ValueError("width must be > 0")
+    if gutter < 0:
+        raise ValueError("gutter must be >= 0")
+
+    panels: list[Image.Image] = []
+    with Image.open(top_path) as top_image:
+        top_panel = fit_panel_to_width(top_image, width, bg_rgb, trim=trim)
+        panels.append(
+            append_caption_area(
+                top_panel,
+                top_caption,
+                caption_height=caption_height,
+                font_path=caption_font,
+                font_size=caption_font_size,
+                min_font_size=caption_min_font_size,
+                margin_x=caption_margin_x,
+                color_rgb=caption_color_rgb,
+                bg_rgb=bg_rgb,
+            )
+        )
+    if bottom_path is not None:
+        with Image.open(bottom_path) as bottom_image:
+            bottom_panel = fit_panel_to_width(bottom_image, width, bg_rgb, trim=trim)
+            panels.append(
+                append_caption_area(
+                    bottom_panel,
+                    bottom_caption,
+                    caption_height=caption_height,
+                    font_path=caption_font,
+                    font_size=caption_font_size,
+                    min_font_size=caption_min_font_size,
+                    margin_x=caption_margin_x,
+                    color_rgb=caption_color_rgb,
+                    bg_rgb=bg_rgb,
+                )
+            )
+
+    height = sum(panel.height for panel in panels) + gutter * (len(panels) - 1)
+    canvas = Image.new("RGBA", (width, height), (*bg_rgb, 255))
+    y = 0
+    for panel in panels:
+        canvas.alpha_composite(panel, (0, y))
+        y += panel.height + gutter
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if output_format == "jpg":
+        canvas.convert("RGB").save(target, format="JPEG", quality=95, optimize=True)
+    else:
+        canvas.save(target, format="PNG", optimize=True)
+    return width, height
 
 
 def quantize_rgba(frame: Image.Image, mode: int) -> Image.Image:
@@ -1093,6 +1420,72 @@ def run_split_sheet(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_stitch_vertical(args: argparse.Namespace) -> int:
+    plan = load_xhs_plan(getattr(args, "xhs_plan", None))
+    input_files = gather_ordered_images(args.input)
+    if not input_files:
+        print("no supported image found", file=sys.stderr)
+        return 2
+
+    output_dir = Path(args.output).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    bg_rgb = parse_hex_color(str(plan.get("bg", args.bg)))
+    caption_color_rgb = parse_hex_color(str(plan.get("caption_color", getattr(args, "caption_color", "#000000"))))
+    captions = load_caption_lines(getattr(args, "captions", None), plan)
+    caption_height = int(plan.get("caption_height", getattr(args, "caption_height", 0)))
+    caption_font_size = int(plan.get("caption_font_size", getattr(args, "caption_font_size", 64)))
+    caption_min_font_size = int(plan.get("caption_min_font_size", getattr(args, "caption_min_font_size", 28)))
+    caption_margin_x = int(plan.get("caption_margin_x", getattr(args, "caption_margin_x", 80)))
+    caption_font = resolve_caption_font(str(plan.get("caption_font", getattr(args, "caption_font", "auto"))))
+    ext = ".jpg" if args.format == "jpg" else ".png"
+    pairs = [input_files[index : index + 2] for index in range(0, len(input_files), 2)]
+    report: list[dict[str, object]] = []
+
+    for idx, pair in enumerate(pairs, start=1):
+        top_index = (idx - 1) * 2
+        bottom_index = top_index + 1
+        top = pair[0]
+        bottom = pair[1] if len(pair) > 1 else None
+        target = output_dir / f"group_{idx:03d}{ext}"
+        width, height = compose_xhs_vertical_flow(
+            top,
+            bottom,
+            target,
+            width=args.cell_size,
+            gutter=args.gutter,
+            bg_rgb=bg_rgb,
+            output_format=args.format,
+            trim=args.trim,
+            top_caption=captions[top_index] if top_index < len(captions) else "",
+            bottom_caption=captions[bottom_index] if bottom_index < len(captions) else "",
+            caption_height=caption_height,
+            caption_font=caption_font,
+            caption_font_size=caption_font_size,
+            caption_min_font_size=caption_min_font_size,
+            caption_margin_x=caption_margin_x,
+            caption_color_rgb=caption_color_rgb,
+        )
+        report.append(
+            {
+                "output": str(target),
+                "top": str(top),
+                "bottom": str(bottom) if bottom is not None else "",
+                "top_caption": captions[top_index] if top_index < len(captions) else "",
+                "bottom_caption": captions[bottom_index] if bottom_index < len(captions) else "",
+                "width": width,
+                "height": height,
+            }
+        )
+        bottom_name = bottom.name if bottom is not None else "<blank>"
+        print(f"[ok] {top.name} + {bottom_name} -> {target.name}")
+
+    report_path = output_dir / "stitch_report.json"
+    report_path.write_text(json.dumps({"count": len(report), "items": report}, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"done: groups={len(report)}, source_images={len(input_files)}")
+    print(f"report: {report_path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="meme-cli", description="Batch convert images into WeChat-friendly meme assets")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1133,6 +1526,25 @@ def build_parser() -> argparse.ArgumentParser:
     split_sheet.add_argument("--bg-tolerance", type=int, default=18, help="Background color tolerance")
     split_sheet.add_argument("--white-threshold", type=int, default=245, help="Treat near-white pixels as background")
     split_sheet.add_argument("--transparent-bg", action="store_true", help="Turn detected background transparent in each tile")
+
+    stitch = sub.add_parser("stitch-vertical", help="Stitch ordered images into Xiaohongshu-style vertical pairs")
+    stitch.add_argument("input", help="Input image directory, image file, or newline-separated image file list")
+    stitch.add_argument("output", help="Output directory")
+    stitch.add_argument("--template", choices=("xhs",), default="xhs", help="Built-in template")
+    stitch.add_argument("--cell-size", type=int, default=1080, help="Output width for each stitched group")
+    stitch.add_argument("--gutter", type=int, default=8, help="White gutter between top and bottom images")
+    stitch.add_argument("--bg", default="#ffffff", help="Canvas background color")
+    stitch.add_argument("--format", choices=("png", "jpg"), default="png", help="Output format")
+    stitch.add_argument("--no-trim", dest="trim", action="store_false", help="Keep original white border instead of trimming")
+    stitch.add_argument("--captions", default=None, help="UTF-8 txt/json captions, one caption per source image")
+    stitch.add_argument("--xhs-plan", default=None, help="JSON plan generated by the xhs-life-philosophy-illustration skill")
+    stitch.add_argument("--caption-height", type=int, default=0, help="Caption area height appended under each panel; 0 disables captions")
+    stitch.add_argument("--caption-font", default="auto", help="Caption font path, or auto for a Chinese system font")
+    stitch.add_argument("--caption-font-size", type=int, default=64, help="Preferred caption font size")
+    stitch.add_argument("--caption-min-font-size", type=int, default=28, help="Minimum caption font size for auto-fit")
+    stitch.add_argument("--caption-margin-x", type=int, default=80, help="Horizontal caption margin in pixels")
+    stitch.add_argument("--caption-color", default="#000000", help="Caption text color")
+    stitch.set_defaults(trim=True)
     return parser
 
 
@@ -1300,6 +1712,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_sync_scan(args)
     if args.command == "split-sheet":
         return run_split_sheet(args)
+    if args.command == "stitch-vertical":
+        return run_stitch_vertical(args)
     parser.print_help()
     return 1
 

@@ -14,5 +14,6 @@ python -m PyInstaller ^
 
 echo.
 echo Build finished.
-echo EXE: %~dp0dist\meme-gui.exe
+copy /Y "%~dp0dist\meme-gui.exe" "%~dp0dist\表情包工坊.exe" >nul
+echo EXE: %~dp0dist\表情包工坊.exe
 endlocal

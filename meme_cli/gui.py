@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import os
 import sys
 import tempfile
@@ -19,7 +20,7 @@ from tkinter.scrolledtext import ScrolledText
 from PIL import Image, ImageDraw, ImageGrab, ImageTk
 
 from . import __version__
-from .cli import SUPPORTED_EXTS, parse_max_bytes, parse_size, run_convert, run_split_sheet
+from .cli import SUPPORTED_EXTS, parse_max_bytes, parse_size, run_convert, run_split_sheet, run_stitch_vertical
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -147,7 +148,7 @@ class BubbleButton(tk.Canvas):
 class MemeGui(BaseTk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("九宫格切图器")
+        self.title("表情包工坊")
         self.geometry("980x760")
         self.minsize(900, 700)
         self.configure(bg=BG)
@@ -168,6 +169,7 @@ class MemeGui(BaseTk):
         self._open_result_buttons: dict[str, tk.Button] = {}
         self._output_list_body: tk.Frame | None = None
         self._output_canvas: tk.Canvas | None = None
+        self._output_thumb_refs: list[ImageTk.PhotoImage] = []
         self._grid_buttons: list[tuple[tk.Button, int, int]] = []
 
         self.convert_vars = {
@@ -196,6 +198,23 @@ class MemeGui(BaseTk):
             "bg_tolerance": tk.StringVar(value="18"),
             "white_threshold": tk.StringVar(value="245"),
             "transparent_bg": tk.BooleanVar(value=True),
+        }
+        self.stitch_vars = {
+            "input": tk.StringVar(),
+            "output": tk.StringVar(),
+            "cell_size": tk.StringVar(value="1080"),
+            "gutter": tk.StringVar(value="8"),
+            "format": tk.StringVar(value="png"),
+            "xhs_plan": tk.StringVar(),
+            "captions": tk.StringVar(),
+            "caption_height": tk.StringVar(value="0"),
+            "caption_font_size": tk.StringVar(value="64"),
+            "preview_enabled": tk.BooleanVar(value=True),
+            "post_author": tk.StringVar(value="小猫松弛所"),
+            "post_avatar": tk.StringVar(),
+            "post_title": tk.StringVar(value="松弛感自救的 9 个小动作"),
+            "post_content": tk.StringVar(value="越忙越要把自己放回来。先稳住，再往前走。"),
+            "post_tags": tk.StringVar(value="#松弛感 #自我修复 #情绪稳定 #治愈 #小红书插图"),
         }
 
         self._setup_icon()
@@ -237,10 +256,12 @@ class MemeGui(BaseTk):
         nav.pack(fill="x")
         self._nav_buttons["split"] = self._sidebar_button(nav, "九宫格切图", lambda: self._switch_mode("split"))
         self._nav_buttons["convert"] = self._sidebar_button(nav, "转换器", lambda: self._switch_mode("convert"), active=False)
+        self._nav_buttons["stitch"] = self._sidebar_button(nav, "组图器", lambda: self._switch_mode("stitch"), active=False)
         self._nav_buttons["outputs"] = self._sidebar_button(nav, "输出目录", lambda: self._switch_mode("outputs"), active=False)
         self._nav_buttons["clear"] = self._sidebar_button(nav, "清空当前", lambda: self._clear_current(self._mode), active=False)
         self._nav_buttons["split"].pack(fill="x", pady=(0, 10))
         self._nav_buttons["convert"].pack(fill="x", pady=(0, 10))
+        self._nav_buttons["stitch"].pack(fill="x", pady=(0, 10))
         self._nav_buttons["outputs"].pack(fill="x", pady=(0, 10))
         self._nav_buttons["clear"].pack(fill="x", pady=(18, 0))
 
@@ -277,6 +298,7 @@ class MemeGui(BaseTk):
         self.pages = {
             "split": self._build_split_page(),
             "convert": self._build_convert_page(),
+            "stitch": self._build_stitch_page(),
             "outputs": self._build_outputs_page(),
         }
 
@@ -310,6 +332,21 @@ class MemeGui(BaseTk):
         self._build_split_options(page).grid(row=0, column=1, sticky="nsew", padx=(10, 0))
         return page
 
+    def _build_stitch_page(self) -> tk.Frame:
+        page = tk.Frame(self.page_host, bg=BG)
+        page.grid_columnconfigure(0, weight=1)
+        page.grid_columnconfigure(1, weight=1)
+        self._build_drop_zone(
+            page,
+            mode="stitch",
+            title="放入多张图片",
+            subtitle="按文件名顺序，两张一组上下拼接",
+            allow_dir=True,
+            browse_text="选择多张图片 / 文件夹",
+        ).grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        self._build_stitch_options(page).grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        return page
+
     def _build_drop_zone(
         self,
         parent: tk.Frame,
@@ -338,8 +375,10 @@ class MemeGui(BaseTk):
 
         action = tk.Frame(wrap, bg=CARD)
         action.grid(row=3, column=0, pady=(10, 0))
-        choose_cmd = (lambda: self._choose_input_file_or_dir(mode)) if allow_dir else (lambda: self._choose_input_file(mode))
+        choose_cmd = (lambda: self._choose_stitch_input()) if mode == "stitch" else (lambda: self._choose_input_file_or_dir(mode)) if allow_dir else (lambda: self._choose_input_file(mode))
         self._small_button(action, browse_text, choose_cmd, bg=PINK_SOFT).pack()
+        if mode == "stitch":
+            self._small_button(action, "选择切图结果目录", self._choose_split_output_for_stitch, bg=MINT).pack(pady=(8, 0))
 
         self._input_views[mode] = {"preview": preview, "info": info}
         preview_shell.bind("<Button-1>", lambda _event: choose_cmd())
@@ -444,6 +483,63 @@ class MemeGui(BaseTk):
         self._build_mode_action(body, mode="split", idle_text="请先选择拼图", action_text="开始切图", command=self.start_split)
         return outer
 
+    def _build_stitch_options(self, parent: tk.Frame) -> tk.Frame:
+        outer, body = make_card(parent, bg=CARD, border=LINE, padx=24, pady=14)
+        tk.Label(body, text="小红书模板", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w")
+        tk.Label(body, text="自动裁掉外圈白边，再按宽度铺满；8 张图会输出 4 组。", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9), wraplength=360).pack(anchor="w", pady=(5, 14))
+        self._small_button(body, "复制小红书爆款 Skill", self._copy_xhs_skill_prompt, bg=YELLOW_SOFT).pack(anchor="w", pady=(0, 14))
+
+        tk.Label(body, text="格式", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w")
+        self._chip_group(body, self.stitch_vars["format"], [("PNG", "png"), ("JPG", "jpg")]).pack(anchor="w", pady=(8, 16))
+
+        fields = tk.Frame(body, bg=CARD)
+        fields.pack(fill="x", pady=(0, 8))
+        tk.Label(fields, text="成图宽度", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 10)).grid(row=0, column=0, sticky="w")
+        tk.Entry(fields, textvariable=self.stitch_vars["cell_size"], relief="flat", bd=0, bg=MINT, fg=TEXT, width=10).grid(row=0, column=1, sticky="w", padx=(8, 20), ipady=6)
+        tk.Label(fields, text="图片间隔", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 10)).grid(row=1, column=0, sticky="w", pady=(10, 0))
+        tk.Entry(fields, textvariable=self.stitch_vars["gutter"], relief="flat", bd=0, bg=MINT, fg=TEXT, width=10).grid(row=1, column=1, sticky="w", padx=(8, 20), pady=(10, 0), ipady=6)
+
+        tk.Label(fields, text="文案文件", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 10)).grid(row=2, column=0, sticky="w", pady=(10, 0))
+        plan_row = tk.Frame(fields, bg=CARD)
+        plan_row.grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=(10, 0))
+        plan_row.grid_columnconfigure(0, weight=1)
+        tk.Entry(plan_row, textvariable=self.stitch_vars["xhs_plan"], relief="flat", bd=0, bg=MINT, fg=TEXT).grid(row=0, column=0, sticky="ew", ipady=6)
+        self._small_button(plan_row, "选择", self._choose_stitch_text_plan, bg=PINK).grid(row=0, column=1, padx=(8, 0))
+        tk.Label(
+            fields,
+            text="可选：选择 xhs_plan.json 或 captions.txt；不选就只拼图不加字幕。",
+            bg=CARD,
+            fg=TEXT_SOFT,
+            font=("Microsoft YaHei UI", 9),
+            wraplength=320,
+        ).grid(row=3, column=1, sticky="w", padx=(8, 0), pady=(4, 0))
+        fields.grid_columnconfigure(1, weight=1)
+
+        preview = TogglePanel(body, "发布预览设置", bg=CARD)
+        preview.pack(fill="x", pady=(12, 0))
+        tk.Checkbutton(
+            preview.body,
+            text="完成后打开小红书发布预览",
+            variable=self.stitch_vars["preview_enabled"],
+            bg=LAVENDER,
+            fg=TEXT,
+            activebackground=LAVENDER,
+            selectcolor=LAVENDER,
+            font=("Microsoft YaHei UI", 10, "bold"),
+        ).pack(anchor="w", pady=(0, 8))
+        post_fields = tk.Frame(preview.body, bg=LAVENDER)
+        post_fields.pack(fill="x")
+        for idx in range(2):
+            post_fields.grid_columnconfigure(idx, weight=1 if idx == 1 else 0)
+        self._labeled_entry(post_fields, "作者名", self.stitch_vars["post_author"], row=0)
+        self._labeled_entry(post_fields, "头像", self.stitch_vars["post_avatar"], row=1, button=("选择", self._choose_post_avatar))
+        self._labeled_entry(post_fields, "标题", self.stitch_vars["post_title"], row=2)
+        self._labeled_entry(post_fields, "内容", self.stitch_vars["post_content"], row=3)
+        self._labeled_entry(post_fields, "标签", self.stitch_vars["post_tags"], row=4)
+
+        self._build_mode_action(body, mode="stitch", idle_text="请先选择多张图片", action_text="开始组图", command=self.start_stitch)
+        return outer
+
     def _build_mode_action(self, parent: tk.Frame, *, mode: str, idle_text: str, action_text: str, command) -> None:
         action = tk.Frame(parent, bg=CARD)
         action.pack(fill="x", pady=(14, 0))
@@ -544,12 +640,12 @@ class MemeGui(BaseTk):
             list_wrap,
             orient="vertical",
             command=self._output_canvas.yview,
-            bg=PINK_SOFT,
-            troughcolor="#FAF7FA",
-            activebackground=PINK,
+            bg="#F8D8E4",
+            troughcolor="#FFF7FA",
+            activebackground="#F2A1BD",
             relief="flat",
             bd=0,
-            width=12,
+            width=8,
         )
         self._output_canvas.configure(yscrollcommand=scrollbar.set)
         self._output_canvas.pack(side="left", fill="both", expand=True)
@@ -575,6 +671,7 @@ class MemeGui(BaseTk):
             return
         for child in self._output_list_body.winfo_children():
             child.destroy()
+        self._output_thumb_refs.clear()
         root = self._output_root()
         dirs = [p for p in root.iterdir() if p.is_dir()] if root.exists() else []
         dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
@@ -582,22 +679,66 @@ class MemeGui(BaseTk):
             tk.Label(self._output_list_body, text="还没有输出结果。完成一次切图或制作后会出现在这里。", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 10)).pack(anchor="w")
             return
         for path in dirs[:30]:
-            row = tk.Frame(self._output_list_body, bg="#FBFBFC", padx=14, pady=10, highlightthickness=1, highlightbackground=LINE)
+            row_bg = "#FBFBFC"
+            row = tk.Frame(self._output_list_body, bg=row_bg, padx=14, pady=10, highlightthickness=1, highlightbackground=LINE, cursor="hand2")
             row.pack(fill="x", pady=(0, 8))
-            meta = tk.Frame(row, bg="#FBFBFC")
+            thumb = self._make_output_dir_thumbnail(path)
+            thumb_label = tk.Label(row, image=thumb, bg=row_bg, cursor="hand2")
+            thumb_label.pack(side="left", padx=(0, 12))
+            self._output_thumb_refs.append(thumb)
+            actions = tk.Frame(row, bg=row_bg)
+            actions.pack(side="right", padx=(8, 0))
+            meta = tk.Frame(row, bg=row_bg, cursor="hand2")
             meta.pack(side="left", fill="x", expand=True)
             info = self._describe_output_dir(path)
-            tk.Label(meta, text=info["display"], bg="#FBFBFC", fg=TEXT, font=("Microsoft YaHei UI", 10, "bold")).pack(anchor="w")
-            tk.Label(meta, text=info["detail"], bg="#FBFBFC", fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(3, 0))
-            actions = tk.Frame(row, bg="#FBFBFC")
-            actions.pack(side="right")
-            self._small_button(actions, "打开", lambda p=path: self._open_dir(str(p)), bg=MINT).pack(side="left", padx=(0, 8))
-            self._small_button(actions, "删除", lambda p=path: self._delete_output_dir(p), bg=PINK_SOFT).pack(side="left")
+            title = tk.Label(meta, text=info["display"], bg=row_bg, fg=TEXT, font=("Microsoft YaHei UI", 10, "bold"), cursor="hand2")
+            title.pack(anchor="w")
+            detail = tk.Label(meta, text=self._middle_ellipsis(info["detail"], 54), bg=row_bg, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9), cursor="hand2")
+            detail.pack(anchor="w", pady=(3, 0))
+            summary = tk.Label(meta, text=self._middle_ellipsis(info["summary"], 58), bg=row_bg, fg=GREEN_TEXT, font=("Microsoft YaHei UI", 9), cursor="hand2")
+            summary.pack(anchor="w", pady=(3, 0))
+            if info["kind"] == "切图":
+                self._small_button(actions, "组图", lambda p=path: self._use_output_dir_for_stitch(p), bg=GREEN).pack(side="left", padx=(0, 6))
+            delete_btn = tk.Button(
+                actions,
+                text="❌",
+                command=lambda p=path: self._delete_output_dir(p),
+                bg=row_bg,
+                fg="#C25A78",
+                activebackground=PINK_SOFT,
+                activeforeground="#C25A78",
+                relief="flat",
+                bd=0,
+                padx=8,
+                pady=6,
+                font=("Segoe UI Emoji", 11),
+                cursor="hand2",
+            )
+            delete_btn.pack(side="left")
+            for widget in (row, thumb_label, meta, title, detail, summary):
+                widget.bind("<Button-1>", lambda _event, p=path: self._open_dir(str(p)))
+                widget.bind("<Enter>", lambda _event, r=row, m=meta, t=thumb_label, a=actions, labels=(title, detail, summary): self._paint_output_row(r, m, t, a, labels, "#FFF7FA"))
+                widget.bind("<Leave>", lambda _event, r=row, m=meta, t=thumb_label, a=actions, labels=(title, detail, summary): self._paint_output_row(r, m, t, a, labels, "#FBFBFC"))
+
+    def _middle_ellipsis(self, text: str, max_chars: int) -> str:
+        if len(text) <= max_chars:
+            return text
+        keep = max(8, (max_chars - 1) // 2)
+        return f"{text[:keep]}…{text[-keep:]}"
+
+    def _paint_output_row(self, row: tk.Frame, meta: tk.Frame, thumb: tk.Label, actions: tk.Frame, labels: tuple[tk.Label, ...], color: str) -> None:
+        row.configure(bg=color)
+        meta.configure(bg=color)
+        thumb.configure(bg=color)
+        actions.configure(bg=color)
+        for label in labels:
+            label.configure(bg=color)
 
     def _describe_output_dir(self, path: Path) -> dict[str, str]:
         name = path.name
-        count = len([p for p in path.iterdir() if p.is_file() and p.suffix.lower() in {".gif", ".png"} and p.name != "preview_boxes.png"])
-        kind = "切图" if "_split_" in name else "制作" if "_gif_" in name or "_convert_" in name else "输出"
+        image_files = self._list_preview_images(path)
+        count = len(image_files)
+        kind = "切图" if "_split_" in name else "组图" if "_stitch_" in name else "制作" if "_gif_" in name or "_convert_" in name else "输出"
         stamp_match = re.search(r"(20\d{6}-\d{6})", name)
         if stamp_match:
             raw = stamp_match.group(1)
@@ -606,13 +747,69 @@ class MemeGui(BaseTk):
             nice_time = time.strftime("%Y-%m-%d %H:%M", time.localtime(path.stat().st_mtime))
         token = self._extract_output_token(name, kind)
         display = f"{kind}-{nice_time}-{count}张-{token}"
+        sample = "、".join(p.name for p in image_files[:3])
+        summary = f"包含：{sample}" if sample else "没有可预览图片"
+        if len(image_files) > 3:
+            summary += f" 等 {len(image_files)} 张"
         return {
             "display": display,
             "detail": path.name,
+            "summary": summary,
+            "kind": kind,
         }
 
+    def _list_preview_images(self, path: Path) -> list[Path]:
+        if not path.exists() or not path.is_dir():
+            return []
+        skip_names = {"preview_boxes.png"}
+        return sorted(
+            [
+                p for p in path.iterdir()
+                if p.is_file()
+                and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+                and p.name not in skip_names
+            ],
+            key=lambda p: p.name.lower(),
+        )
+
+    def _make_output_dir_thumbnail(self, path: Path) -> ImageTk.PhotoImage:
+        canvas = Image.new("RGBA", (132, 88), (255, 255, 255, 255))
+        draw = ImageDraw.Draw(canvas)
+        draw.rounded_rectangle((0, 0, 131, 87), radius=10, fill=(255, 255, 255, 255), outline=(231, 222, 231, 255), width=1)
+        images = self._list_preview_images(path)[:4]
+        if not images:
+            draw.text((66, 44), "空目录", fill=(139, 122, 134, 255), anchor="mm", font=("Microsoft YaHei UI", 10))
+            return ImageTk.PhotoImage(canvas)
+
+        boxes = [(8, 8, 62, 40), (70, 8, 124, 40), (8, 48, 62, 80), (70, 48, 124, 80)]
+        if len(images) == 1:
+            boxes = [(10, 8, 122, 80)]
+        elif len(images) == 2:
+            boxes = [(8, 12, 62, 76), (70, 12, 124, 76)]
+        for image_path, box in zip(images, boxes):
+            x0, y0, x1, y1 = box
+            try:
+                with Image.open(image_path) as image:
+                    thumb = image.convert("RGBA")
+                    thumb.thumbnail((x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
+            except Exception:
+                continue
+            px = x0 + ((x1 - x0) - thumb.width) // 2
+            py = y0 + ((y1 - y0) - thumb.height) // 2
+            draw.rounded_rectangle((x0, y0, x1, y1), radius=6, fill=(250, 250, 252, 255), outline=(231, 222, 231, 255))
+            canvas.alpha_composite(thumb, (px, py))
+        return ImageTk.PhotoImage(canvas)
+
+    def _use_output_dir_for_stitch(self, path: Path) -> None:
+        if not path.exists() or not path.is_dir():
+            messagebox.showerror("目录不存在", str(path))
+            return
+        self._switch_mode("stitch")
+        self.after(30, lambda p=path: self._set_input("stitch", p))
+        self.after(60, lambda: self._flash_toast("已把这个切图目录放入组图器，可以直接开始组图。"))
+
     def _extract_output_token(self, name: str, kind: str) -> str:
-        marker = "_split_" if kind == "切图" else "_gif_" if "_gif_" in name else "_convert_"
+        marker = "_split_" if kind == "切图" else "_stitch_" if kind == "组图" else "_gif_" if "_gif_" in name else "_convert_"
         token = name.split(marker, 1)[0] if marker in name else name
         token = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_-]+", "", token).strip("_-")
         if not token:
@@ -688,6 +885,7 @@ class MemeGui(BaseTk):
         self._tool_button(grid, "清空状态", lambda: self._clear_current(self._mode)).grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=(10, 0))
         self._tool_button(grid, "切换高级设置", self._toggle_advanced_current).grid(row=1, column=1, sticky="ew", padx=8, pady=(10, 0))
         self._tool_button(grid, "查看日志", self._toggle_logs).grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(10, 0))
+        self._tool_button(grid, "发布预览", lambda: self._show_xhs_publish_preview()).grid(row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         self._recent_label = tk.Label(body, text="最近结果：还没有输出文件", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9))
         self._recent_label.pack(anchor="w", pady=(12, 0))
         return outer
@@ -722,6 +920,23 @@ class MemeGui(BaseTk):
             font=("Microsoft YaHei UI", 10, "bold"),
             cursor="hand2",
         )
+
+    def _labeled_entry(
+        self,
+        parent: tk.Frame,
+        label: str,
+        variable: tk.StringVar,
+        *,
+        row: int,
+        button: tuple[str, object] | None = None,
+    ) -> None:
+        tk.Label(parent, text=label, bg=parent.cget("bg"), fg=TEXT, font=("Microsoft YaHei UI", 10)).grid(row=row, column=0, sticky="w", pady=(0, 8))
+        wrap = tk.Frame(parent, bg=parent.cget("bg"))
+        wrap.grid(row=row, column=1, sticky="ew", padx=(8, 0), pady=(0, 8))
+        wrap.grid_columnconfigure(0, weight=1)
+        tk.Entry(wrap, textvariable=variable, relief="flat", bd=0, bg=CARD, fg=TEXT).grid(row=0, column=0, sticky="ew", ipady=6)
+        if button:
+            self._small_button(wrap, button[0], button[1], bg=CARD).grid(row=0, column=1, padx=(8, 0))
 
     def _tool_button(self, parent: tk.Misc, text: str, command) -> tk.Button:
         return tk.Button(
@@ -775,10 +990,18 @@ class MemeGui(BaseTk):
         return row
 
     def _current_output_var(self) -> tk.StringVar:
-        return self.convert_vars["output"] if self._mode == "convert" else self.split_vars["output"]
+        if self._mode == "convert":
+            return self.convert_vars["output"]
+        if self._mode == "stitch":
+            return self.stitch_vars["output"]
+        return self.split_vars["output"]
 
     def _vars(self, mode: str) -> dict[str, tk.Variable]:
-        return self.convert_vars if mode == "convert" else self.split_vars
+        if mode == "convert":
+            return self.convert_vars
+        if mode == "stitch":
+            return self.stitch_vars
+        return self.split_vars
 
     def _on_mousewheel(self, event) -> None:
         if hasattr(self, "page_canvas") and getattr(event, "delta", 0):
@@ -797,13 +1020,17 @@ class MemeGui(BaseTk):
             if isinstance(button, BubbleButton):
                 button.set_active(key == mode)
         if mode == "split":
-            self._hero_title.configure(text="九宫格切图器")
+            self._hero_title.configure(text="九宫格切图")
             self._hero_sub.configure(text="拖入拼图或粘贴图片，选宫格，点开始。结果会自动打开。")
             self._set_toast("准备好了，选择或粘贴一张拼图即可开始。")
         elif mode == "convert":
             self._hero_title.configure(text="转换器")
             self._hero_sub.configure(text="把单张或整个文件夹的图片批量转成 GIF / PNG，可自动背景转透明。")
             self._set_toast("选择图片或文件夹即可开始转换。")
+        elif mode == "stitch":
+            self._hero_title.configure(text="组图器")
+            self._hero_sub.configure(text="内置小红书上下拼接模板，多张图片按顺序两两成组。")
+            self._set_toast("选择多张图片或文件夹，8 张会输出 4 组上下拼接图。")
         else:
             self._hero_title.configure(text="输出目录")
             self._hero_sub.configure(text="快速打开最近自动生成的结果目录。")
@@ -824,7 +1051,7 @@ class MemeGui(BaseTk):
     def _toggle_advanced_current(self) -> None:
         if self._mode == "convert":
             self.convert_advanced.toggle()
-        else:
+        elif self._mode == "split":
             self.split_advanced.toggle()
 
     def _toggle_logs(self) -> None:
@@ -845,6 +1072,20 @@ class MemeGui(BaseTk):
             items = self.tk.splitlist(data)
         except Exception:
             items = [data]
+        if mode == "stitch":
+            paths = [Path(raw.strip("{}")).expanduser() for raw in items]
+            files = [path for path in paths if path.is_file() and path.suffix.lower() in SUPPORTED_EXTS]
+            dirs = [path for path in paths if path.is_dir()]
+            if len(files) > 1:
+                self._set_input_value(mode, "\n".join(str(path) for path in files), files[0])
+                self._append_log(f"[drop] {mode} <- {len(files)} files")
+                self._flash_toast("已接收多张图片，将按拖入顺序组图。")
+                return
+            if dirs and allow_dir:
+                self._set_input(mode, dirs[0])
+                self._append_log(f"[drop] {mode} <- {dirs[0]}")
+                self._flash_toast("已接收图片文件夹。")
+                return
         for raw in items:
             path = Path(raw.strip("{}")).expanduser()
             if not path.exists():
@@ -870,6 +1111,166 @@ class MemeGui(BaseTk):
         if path:
             self._set_input(mode, Path(path))
 
+    def _choose_stitch_input(self) -> None:
+        paths = filedialog.askopenfilenames(
+            title="选择多张图片",
+            filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp"), ("All files", "*.*")],
+        )
+        if paths:
+            self._set_input_value("stitch", "\n".join(paths), Path(paths[0]))
+            return
+        path = filedialog.askdirectory(title="选择图片文件夹")
+        if path:
+            self._set_input("stitch", Path(path))
+
+    def _choose_split_output_for_stitch(self) -> None:
+        self._show_split_output_picker()
+
+    def _show_split_output_picker(self) -> None:
+        root = self._output_root()
+        dirs = [p for p in root.iterdir() if p.is_dir() and "_split_" in p.name] if root.exists() else []
+        dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+        win = tk.Toplevel(self)
+        win.title("选择切图结果目录")
+        win.geometry("760x620")
+        win.minsize(620, 480)
+        win.configure(bg=BG)
+        win.transient(self)
+        win.grab_set()
+        win._thumb_refs = []  # type: ignore[attr-defined]
+
+        outer, body = make_card(win, bg=CARD, border=LINE, padx=24, pady=18)
+        outer.pack(fill="both", expand=True, padx=18, pady=18)
+        head = tk.Frame(body, bg=CARD)
+        head.pack(fill="x")
+        tk.Label(head, text="选择切图结果目录", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 18, "bold")).pack(side="left")
+        self._small_button(head, "关闭", win.destroy, bg=PINK_SOFT).pack(side="right")
+        tk.Label(body, text="点击一条切图结果即可放入组图器。", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 10)).pack(anchor="w", pady=(8, 14))
+
+        list_wrap = tk.Frame(body, bg=CARD)
+        list_wrap.pack(fill="both", expand=True)
+        canvas = tk.Canvas(list_wrap, bg=CARD, highlightthickness=0, bd=0)
+        scrollbar = tk.Scrollbar(
+            list_wrap,
+            orient="vertical",
+            command=canvas.yview,
+            bg="#F8D8E4",
+            troughcolor="#FFF7FA",
+            activebackground="#F2A1BD",
+            relief="flat",
+            bd=0,
+            width=8,
+        )
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        content = tk.Frame(canvas, bg=CARD)
+        window = canvas.create_window((0, 0), window=content, anchor="nw")
+        content.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+        canvas.bind("<Enter>", lambda _event: win.bind_all("<MouseWheel>", lambda event: canvas.yview_scroll(int(-1 * (event.delta / 120)), "units"), add=True))
+        canvas.bind("<Leave>", lambda _event: win.unbind_all("<MouseWheel>"))
+
+        if not dirs:
+            tk.Label(content, text="还没有九宫格切图结果。请先完成一次切图。", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 11)).pack(anchor="w", pady=20)
+            return
+
+        for path in dirs[:40]:
+            self._build_split_picker_row(content, path, win)
+
+    def _build_split_picker_row(self, parent: tk.Frame, path: Path, win: tk.Toplevel) -> None:
+        row_bg = "#FBFBFC"
+        row = tk.Frame(parent, bg=row_bg, padx=14, pady=10, highlightthickness=1, highlightbackground=LINE, cursor="hand2")
+        row.pack(fill="x", pady=(0, 8))
+        thumb = self._make_output_dir_thumbnail(path)
+        win._thumb_refs.append(thumb)  # type: ignore[attr-defined]
+        thumb_label = tk.Label(row, image=thumb, bg=row_bg, cursor="hand2")
+        thumb_label.pack(side="left", padx=(0, 12))
+        meta = tk.Frame(row, bg=row_bg, cursor="hand2")
+        meta.pack(side="left", fill="x", expand=True)
+        info = self._describe_output_dir(path)
+        title = tk.Label(meta, text=info["display"], bg=row_bg, fg=TEXT, font=("Microsoft YaHei UI", 10, "bold"), cursor="hand2")
+        title.pack(anchor="w")
+        detail = tk.Label(meta, text=self._middle_ellipsis(info["detail"], 56), bg=row_bg, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9), cursor="hand2")
+        detail.pack(anchor="w", pady=(3, 0))
+        summary = tk.Label(meta, text=self._middle_ellipsis(info["summary"], 60), bg=row_bg, fg=GREEN_TEXT, font=("Microsoft YaHei UI", 9), cursor="hand2")
+        summary.pack(anchor="w", pady=(3, 0))
+
+        def choose(_event=None, p=path) -> None:
+            win.destroy()
+            self._set_input("stitch", p)
+            self._flash_toast("已选择切图结果目录，可以直接开始组图。")
+
+        for widget in (row, thumb_label, meta, title, detail, summary):
+            widget.bind("<Button-1>", choose)
+            widget.bind("<Enter>", lambda _event, r=row, m=meta, t=thumb_label, labels=(title, detail, summary): self._paint_picker_row(r, m, t, labels, "#FFF7FA"))
+            widget.bind("<Leave>", lambda _event, r=row, m=meta, t=thumb_label, labels=(title, detail, summary): self._paint_picker_row(r, m, t, labels, "#FBFBFC"))
+
+    def _paint_picker_row(self, row: tk.Frame, meta: tk.Frame, thumb: tk.Label, labels: tuple[tk.Label, ...], color: str) -> None:
+        row.configure(bg=color)
+        meta.configure(bg=color)
+        thumb.configure(bg=color)
+        for label in labels:
+            label.configure(bg=color)
+
+    def _choose_stitch_text_plan(self) -> None:
+        path = filedialog.askopenfilename(
+            title="选择文案文件",
+            filetypes=[
+                ("文案配置", "xhs_plan.json;captions.txt;*.json;*.txt"),
+                ("JSON 文件", "*.json"),
+                ("文本文件", "*.txt"),
+                ("所有文件", "*.*"),
+            ],
+        )
+        if path:
+            self.stitch_vars["xhs_plan"].set(path)
+            self.stitch_vars["captions"].set("")
+            if self.stitch_vars["caption_height"].get().strip() in {"", "0"}:
+                self.stitch_vars["caption_height"].set("180")
+
+    def _choose_post_avatar(self) -> None:
+        path = filedialog.askopenfilename(
+            title="选择头像",
+            filetypes=[("图片文件", "*.png;*.jpg;*.jpeg;*.bmp;*.webp"), ("所有文件", "*.*")],
+        )
+        if path:
+            self.stitch_vars["post_avatar"].set(path)
+
+    def _copy_xhs_skill_prompt(self) -> None:
+        skill_path = Path("skills") / "xhs-life-philosophy-illustration"
+        prompt = f"""使用项目内小红书爆款插图 Skill：
+{skill_path}
+
+请帮我生成一套小红书人生哲学/职场哲学插图素材包。
+
+要求：
+1. 先问我确认主题和主体样式。
+2. 主体样式从这些里面选：
+   - workplace-monk：职场和尚
+   - office-cat：打工猫
+   - round-office-worker：圆脸打工人
+   - zen-rabbit：禅意兔子
+   - tiny-robot：小机器人
+3. 生成 9 条短文案切片，每条对应一格图。
+4. 生成一张无字九宫格生图提示词，不要让图片模型生成中文文字。
+5. 同时生成九张单独方图提示词。
+6. 每次额外输出一句简短标题钩子。
+7. 输出 hook.txt、tags.txt、post_copy.txt、captions.txt、xhs_plan.json、image_prompt_grid.txt、image_prompt_individual.txt。
+8. xhs_plan.json 要包含 hook 和 tags，并能直接给表情包工坊组图器当“文案文件”使用。
+9. post_copy.txt 要能直接复制去小红书发布。
+
+默认建议：
+主题：松弛感自救
+主体：office-cat
+标题钩子：瞬间被这段话点醒了~
+风格：小红书治愈贴纸漫画，白底，高留白，九宫格，无字。
+"""
+        self.clipboard_clear()
+        self.clipboard_append(prompt)
+        self._flash_toast("已复制小红书爆款 Skill 提示，可直接粘贴给 Codex。")
+
     def _choose_input_file(self, mode: str) -> None:
         path = filedialog.askopenfilename(
             title="选择图片" if mode == "convert" else "选择拼图",
@@ -891,12 +1292,12 @@ class MemeGui(BaseTk):
         self._vars(mode)["output"].set("")
         view = self._input_views.get(mode)
         if view:
-            empty_text = "点击选择图片/文件夹\n或拖拽 / Ctrl+V 粘贴" if mode == "convert" else "点击选择图片\n或拖拽 / Ctrl+V 粘贴"
+            empty_text = "点击选择图片/文件夹\n或拖拽 / Ctrl+V 粘贴" if mode in {"convert", "stitch"} else "点击选择图片\n或拖拽 / Ctrl+V 粘贴"
             view["preview"].configure(image="", text=empty_text)
             hint = "支持拖拽和 Ctrl+V 粘贴" if DND_READY else "可用 Ctrl+V 粘贴，或点击选择图片"
             view["info"].configure(text=hint)
         self._preview_refs.pop(mode, None)
-        idle_text = "请先选择拼图" if mode == "split" else "请先选择图片或文件夹"
+        idle_text = "请先选择拼图" if mode == "split" else "请先选择多张图片" if mode == "stitch" else "请先选择图片或文件夹"
         if mode in self._action_buttons:
             self._action_buttons[mode].configure(text=idle_text, state="disabled", bg="#E8E3E8", fg=TEXT_SOFT, cursor="arrow")
         if mode in self._status_labels:
@@ -906,17 +1307,24 @@ class MemeGui(BaseTk):
         self._flash_toast("已清空，可以重新导入拼图。")
 
     def _set_input(self, mode: str, path: Path) -> None:
+        self._set_input_value(mode, str(path), path)
+
+    def _set_input_value(self, mode: str, value: str, preview_path: Path) -> None:
         vars_map = self._vars(mode)
-        vars_map["input"].set(str(path))
-        vars_map["output"].set(str(self._suggest_output(mode, path)))
-        self._update_preview(mode, path)
+        vars_map["input"].set(value)
+        vars_map["output"].set(str(self._suggest_output(mode, preview_path)))
+        self._update_preview(mode, preview_path)
         if mode in self._action_buttons:
-            text = "开始切图" if mode == "split" else "开始转换"
+            text = "开始切图" if mode == "split" else "开始组图" if mode == "stitch" else "开始转换"
             self._action_buttons[mode].configure(text=text, state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
         if mode in self._status_labels:
             if mode == "split":
                 rows, cols = self.split_vars["rows"].get(), self.split_vars["cols"].get()
                 status = f"将按 {rows} x {cols} 切图，完成后自动打开结果目录"
+            elif mode == "stitch":
+                count = self._count_stitch_inputs(value)
+                groups = (count + 1) // 2
+                status = f"将按顺序上下拼接，预计输出 {groups} 组图片"
             else:
                 status = "将批量转换为表情图片，完成后自动打开结果目录"
             self._status_labels[mode].configure(text=status, fg=TEXT_SOFT)
@@ -925,9 +1333,17 @@ class MemeGui(BaseTk):
 
     def _suggest_output(self, mode: str, path: Path) -> Path:
         stem = path.name if path.is_dir() else path.stem
-        suffix = "gif" if mode == "convert" else "split"
+        suffix = "gif" if mode == "convert" else "stitch" if mode == "stitch" else "split"
         stamp = time.strftime("%Y%m%d-%H%M%S")
         return Path(tempfile.gettempdir()) / "meme-cli-output" / f"{stem}_{suffix}_{stamp}"
+
+    def _count_stitch_inputs(self, value: str) -> int:
+        path = Path(value) if "\n" not in value else None
+        if path is not None and path.exists():
+            if path.is_dir():
+                return len([p for p in path.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS])
+            return 1
+        return len([line for line in value.splitlines() if line.strip()])
 
     def _update_preview(self, mode: str, path: Path) -> None:
         view = self._input_views[mode]
@@ -935,10 +1351,18 @@ class MemeGui(BaseTk):
         info: tk.Label = view["info"]  # type: ignore[assignment]
 
         if path.is_dir():
-            count = len([p for p in path.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS])
-            preview.configure(image="", text="文件夹\n批量转换")
+            files = [p for p in path.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS]
+            count = len(files)
+            action = "上下组图" if mode == "stitch" else "批量转换"
+            if files:
+                folder_thumb = self._make_folder_input_thumbnail(files[:4], 236)
+                photo = ImageTk.PhotoImage(folder_thumb)
+                preview.configure(image=photo, text="")
+                self._preview_refs[mode] = photo
+            else:
+                preview.configure(image="", text=f"文件夹\n{action}")
+                self._preview_refs.pop(mode, None)
             info.configure(text=f"{path.name}，共 {count} 张支持图片")
-            self._preview_refs.pop(mode, None)
             return
 
         try:
@@ -954,8 +1378,34 @@ class MemeGui(BaseTk):
 
         photo = ImageTk.PhotoImage(thumb)
         preview.configure(image=photo, text="")
-        info.configure(text=f"{width} x {height} · {frames} 帧")
+        extra = ""
+        if mode == "stitch":
+            extra = f"\n已选 {self._count_stitch_inputs(self.stitch_vars['input'].get())} 张，按顺序两两拼接"
+        info.configure(text=f"{width} x {height} · {frames} 帧{extra}")
         self._preview_refs[mode] = photo
+
+    def _make_folder_input_thumbnail(self, files: list[Path], size: int) -> Image.Image:
+        canvas = Image.new("RGBA", (size, size), (250, 250, 252, 255))
+        draw = ImageDraw.Draw(canvas)
+        draw.rounded_rectangle((1, 1, size - 2, size - 2), radius=10, fill=(250, 250, 252, 255), outline=(231, 222, 231, 255))
+        gap = 8
+        cell = (size - gap * 3) // 2
+        boxes = [
+            (gap, gap),
+            (gap * 2 + cell, gap),
+            (gap, gap * 2 + cell),
+            (gap * 2 + cell, gap * 2 + cell),
+        ]
+        for file_path, (x, y) in zip(files, boxes):
+            try:
+                with Image.open(file_path) as image:
+                    thumb = image.convert("RGBA")
+                    thumb.thumbnail((cell - 8, cell - 8), Image.Resampling.LANCZOS)
+            except Exception:
+                continue
+            draw.rounded_rectangle((x, y, x + cell, y + cell), radius=8, fill=(255, 255, 255, 255), outline=(231, 222, 231, 255))
+            canvas.alpha_composite(thumb, (x + (cell - thumb.width) // 2, y + (cell - thumb.height) // 2))
+        return canvas
 
     def _make_preview_image(self, image: Image.Image, mode: str) -> Image.Image:
         thumb = image.convert("RGBA")
@@ -1069,7 +1519,7 @@ class MemeGui(BaseTk):
     def _update_recent_output(self, output_dir: Path) -> None:
         candidates = [
             p for p in output_dir.rglob("*")
-            if p.is_file() and p.suffix.lower() in {".gif", ".png"} and p.name not in {"preview_boxes.png"}
+            if p.is_file() and p.suffix.lower() in {".gif", ".png", ".jpg", ".jpeg"} and p.name not in {"preview_boxes.png"}
         ]
         if candidates:
             self._last_output_file = max(candidates, key=lambda p: p.stat().st_mtime)
@@ -1093,7 +1543,7 @@ class MemeGui(BaseTk):
         self._append_log(f"== {title} ==")
         self._flash_toast(f"{title} 已开始执行……", reset=False)
         job_mode = getattr(args, "command", "")
-        ui_mode = "split" if job_mode == "split-sheet" else "convert"
+        ui_mode = "split" if job_mode == "split-sheet" else "stitch" if job_mode == "stitch-vertical" else "convert"
         if ui_mode in self._action_buttons:
             self._action_buttons[ui_mode].configure(text="正在处理…", state="disabled", bg="#E8E3E8", fg=TEXT_SOFT, cursor="arrow")
         if ui_mode in self._status_labels:
@@ -1113,6 +1563,8 @@ class MemeGui(BaseTk):
                     self.after(0, lambda: self._update_recent_output(out_dir))
                     self.after(0, lambda: self._open_dir(str(out_dir)))
                     self.after(0, lambda m=ui_mode: self._show_success(out_dir, m))
+                    if ui_mode == "stitch" and bool(self.stitch_vars["preview_enabled"].get()):
+                        self.after(0, lambda: self._show_xhs_publish_preview(out_dir))
                     self.after(0, lambda: self._flash_toast(f"{title} 已完成。"))
                 else:
                     self.after(0, lambda: self._flash_toast(f"{title} 已结束，返回 code={code}。"))
@@ -1130,22 +1582,187 @@ class MemeGui(BaseTk):
         self._running = False
 
     def _restore_start_button(self, mode: str, text: str | None = None) -> None:
-        text = text or ("开始切图" if mode == "split" else "开始制作")
+        text = text or ("开始切图" if mode == "split" else "开始组图" if mode == "stitch" else "开始制作")
         if mode in self._action_buttons:
             self._action_buttons[mode].configure(text=text, state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
         if mode in self._status_labels:
             self._status_labels[mode].configure(text="完成后自动打开结果目录", fg=TEXT_SOFT)
 
     def _show_success(self, output_dir: Path, mode: str) -> None:
-        count = len([p for p in output_dir.iterdir() if p.is_file() and p.suffix.lower() in {".gif", ".png"} and p.name != "preview_boxes.png"])
+        count = len([p for p in output_dir.iterdir() if p.is_file() and p.suffix.lower() in {".gif", ".png", ".jpg", ".jpeg"} and p.name != "preview_boxes.png"])
         if mode in self._action_buttons:
-            self._action_buttons[mode].configure(text="继续切图" if mode == "split" else "继续转换", state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
+            self._action_buttons[mode].configure(text="继续切图" if mode == "split" else "继续组图" if mode == "stitch" else "继续转换", state="normal", bg=GREEN, fg=GREEN_TEXT, cursor="hand2")
         if mode in self._status_labels:
-            verb = "切出" if mode == "split" else "转换"
+            verb = "切出" if mode == "split" else "生成" if mode == "stitch" else "转换"
             self._status_labels[mode].configure(text=f"已{verb} {count} 张图片，结果目录已打开。", fg=GREEN_TEXT)
         if mode in self._open_result_buttons:
             self._open_result_buttons[mode].pack(pady=(10, 0))
         self._refresh_output_dirs()
+
+    def _show_xhs_publish_preview(self, output_dir: Path | None = None) -> None:
+        if output_dir is None:
+            if not self._last_output_file:
+                messagebox.showinfo("没有预览内容", "请先完成一次组图。")
+                return
+            output_dir = self._last_output_file.parent
+        image_paths = [
+            path for path in sorted(output_dir.iterdir())
+            if path.is_file()
+            and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+            and path.name not in {"preview_boxes.png"}
+            and not path.name.startswith("sheet_report")
+        ]
+        if not image_paths:
+            messagebox.showinfo("没有预览内容", "结果目录里没有可预览的图片。")
+            return
+
+        win = tk.Toplevel(self)
+        win.title("小红书发布预览")
+        win.geometry("1180x760")
+        win.minsize(980, 640)
+        win.configure(bg="#EFEFEF")
+        win._image_refs = []  # type: ignore[attr-defined]
+
+        shell = tk.Frame(win, bg=CARD)
+        shell.pack(fill="both", expand=True, padx=18, pady=16)
+        shell.grid_columnconfigure(0, weight=3)
+        shell.grid_columnconfigure(1, weight=2)
+        shell.grid_rowconfigure(0, weight=1)
+
+        image_host = tk.Frame(shell, bg="#F8F8F8", highlightthickness=1, highlightbackground=LINE)
+        image_host.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
+        image_host.grid_rowconfigure(0, weight=1)
+        image_host.grid_columnconfigure(0, weight=1)
+        canvas = tk.Canvas(image_host, bg="#F8F8F8", highlightthickness=0)
+        scroll = ttk.Scrollbar(image_host, orient="horizontal", command=canvas.xview)
+        canvas.configure(xscrollcommand=scroll.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=1, column=0, sticky="ew")
+
+        x = 20
+        max_h = 670
+        page_w = 720
+        dot_y = max_h + 36
+        for idx, path in enumerate(image_paths, start=1):
+            try:
+                with Image.open(path) as image:
+                    frame = image.convert("RGBA")
+                    frame.thumbnail((page_w - 40, max_h), Image.Resampling.LANCZOS)
+                    photo = ImageTk.PhotoImage(frame)
+            except Exception:
+                continue
+            win._image_refs.append(photo)  # type: ignore[attr-defined]
+            image_x = x + (page_w - photo.width()) // 2
+            image_y = 18 + max(0, (max_h - photo.height()) // 2)
+            canvas.create_image(image_x, image_y, image=photo, anchor="nw")
+            canvas.create_text(x + page_w - 22, 28, text=f"{idx}/{len(image_paths)}", anchor="e", fill="#777777", font=("Microsoft YaHei UI", 10, "bold"))
+            x += page_w
+        total_w = max(page_w, x)
+        canvas.configure(scrollregion=(0, 0, total_w, max_h + 70))
+        dots = " ".join("●" for _ in image_paths)
+        canvas.create_text(page_w // 2, dot_y, text=dots, fill="#CFCFCF", font=("Microsoft YaHei UI", 12), tags="pager_dots")
+
+        def on_wheel(event) -> None:
+            canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind("<MouseWheel>", on_wheel)
+
+        def jump_page(delta: int) -> None:
+            left = canvas.xview()[0]
+            current = round(left * total_w / page_w)
+            target = min(max(0, current + delta), max(0, len(image_paths) - 1))
+            canvas.xview_moveto((target * page_w) / total_w)
+
+        canvas.bind("<Left>", lambda _event: jump_page(-1))
+        canvas.bind("<Right>", lambda _event: jump_page(1))
+        canvas.focus_set()
+
+        side = tk.Frame(shell, bg=CARD)
+        side.grid(row=0, column=1, sticky="nsew")
+        side.grid_rowconfigure(1, weight=1)
+        self._build_xhs_post_info(side).grid(row=0, column=0, sticky="ew")
+        self._build_xhs_comments(side).grid(row=1, column=0, sticky="nsew", pady=(14, 0))
+
+    def _build_xhs_post_info(self, parent: tk.Frame) -> tk.Frame:
+        card = tk.Frame(parent, bg=CARD, highlightthickness=1, highlightbackground=LINE, padx=16, pady=14)
+        head = tk.Frame(card, bg=CARD)
+        head.pack(fill="x")
+
+        avatar = self._make_avatar_image(self.stitch_vars["post_avatar"].get().strip(), 44)
+        card._avatar_ref = ImageTk.PhotoImage(avatar)  # type: ignore[attr-defined]
+        tk.Label(head, image=card._avatar_ref, bg=CARD).pack(side="left")  # type: ignore[attr-defined]
+        tk.Label(head, text=self.stitch_vars["post_author"].get().strip() or "小红书作者", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 12, "bold")).pack(side="left", padx=(10, 0))
+        tk.Button(head, text="关注", bg="#FF2E55", fg="white", activebackground="#FF2E55", activeforeground="white", relief="flat", bd=0, padx=24, pady=7, font=("Microsoft YaHei UI", 11, "bold")).pack(side="right")
+
+        title = self.stitch_vars["post_title"].get().strip() or "今天也要好好照顾自己"
+        content = self.stitch_vars["post_content"].get().strip()
+        tags = self.stitch_vars["post_tags"].get().strip()
+        tk.Label(card, text=title, bg=CARD, fg="#222222", anchor="w", justify="left", wraplength=360, font=("Microsoft YaHei UI", 13, "bold")).pack(fill="x", pady=(14, 4))
+        if content:
+            tk.Label(card, text=content, bg=CARD, fg="#333333", anchor="w", justify="left", wraplength=360, font=("Microsoft YaHei UI", 10)).pack(fill="x", pady=(0, 8))
+        if tags:
+            tk.Label(card, text=tags, bg=CARD, fg="#1F4E8C", anchor="w", justify="left", wraplength=360, font=("Microsoft YaHei UI", 10)).pack(fill="x")
+        tk.Label(card, text=time.strftime("%m-%d") + " 广东", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(12, 0))
+        return card
+
+    def _build_xhs_comments(self, parent: tk.Frame) -> tk.Frame:
+        card = tk.Frame(parent, bg=CARD, highlightthickness=1, highlightbackground=LINE)
+        title = tk.Label(card, text="共 203 条评论", bg=CARD, fg=TEXT_SOFT, anchor="w", font=("Microsoft YaHei UI", 10))
+        title.pack(fill="x", padx=16, pady=(12, 8))
+
+        comments = [
+            ("Tbmhbe~", "其实不结婚生子能免除极大部分痛苦和艰辛", "7天前 福建", "♡ 21   💬 5"),
+            ("派小星", "真相了！", "7天前 福建", "♡ 1   回复"),
+            ("橘子去皮", "独立人格之后，就知道有多爽了。", "5小时前 广东", "♡ 赞   回复"),
+            ("咬咬咬", "你看到的成功同学，大多都是踩在父母肩膀上的。如果让他们来体验你的剧本，那未必能坚持到如今的地步。你当下的课题，是你自己的修行。", "刚刚", "♡ 3187   ☆ 1607   💬 203"),
+        ]
+        body = tk.Frame(card, bg=CARD)
+        body.pack(fill="both", expand=True, padx=16)
+        for name, text, meta, action in comments:
+            item = tk.Frame(body, bg=CARD)
+            item.pack(fill="x", pady=(0, 14))
+            self._comment_avatar(item).pack(side="left", anchor="n", padx=(0, 10))
+            content = tk.Frame(item, bg=CARD)
+            content.pack(side="left", fill="x", expand=True)
+            tk.Label(content, text=name, bg=CARD, fg=TEXT_SOFT, anchor="w", font=("Microsoft YaHei UI", 9)).pack(fill="x")
+            tk.Label(content, text=text, bg=CARD, fg="#333333", anchor="w", justify="left", wraplength=340, font=("Microsoft YaHei UI", 10)).pack(fill="x", pady=(2, 4))
+            tk.Label(content, text=f"{meta}    {action}", bg=CARD, fg=TEXT_SOFT, anchor="w", font=("Microsoft YaHei UI", 9)).pack(fill="x")
+
+        bottom = tk.Frame(card, bg=CARD, padx=12, pady=10)
+        bottom.pack(fill="x", side="bottom")
+        tk.Label(bottom, text="说点什么...", bg="#F5F5F5", fg=TEXT_SOFT, anchor="w", padx=16, pady=8, font=("Microsoft YaHei UI", 10)).pack(side="left", fill="x", expand=True)
+        tk.Label(bottom, text="♡ 3187   ☆ 1607   💬 203   ↗", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 10)).pack(side="right", padx=(10, 0))
+        return card
+
+    def _make_avatar_image(self, path_value: str, size: int) -> Image.Image:
+        if path_value and Path(path_value).is_file():
+            try:
+                with Image.open(path_value) as image:
+                    avatar = image.convert("RGBA")
+                    avatar.thumbnail((size, size), Image.Resampling.LANCZOS)
+                    canvas = Image.new("RGBA", (size, size), (255, 255, 255, 0))
+                    canvas.alpha_composite(avatar, ((size - avatar.width) // 2, (size - avatar.height) // 2))
+                    return canvas
+            except Exception:
+                pass
+        image = Image.new("RGBA", (size, size), (238, 249, 240, 255))
+        draw = ImageDraw.Draw(image)
+        draw.ellipse((2, 2, size - 3, size - 3), fill=(238, 249, 240, 255), outline=(190, 230, 200, 255), width=2)
+        draw.ellipse((size * 0.32, size * 0.22, size * 0.68, size * 0.58), fill=(255, 255, 255, 255), outline=(80, 80, 80, 255), width=2)
+        draw.rounded_rectangle((size * 0.28, size * 0.54, size * 0.72, size * 0.86), radius=8, fill=(255, 168, 80, 255), outline=(80, 80, 80, 255), width=2)
+        return image
+
+    def _comment_avatar(self, parent: tk.Frame) -> tk.Label:
+        size = 34
+        image = Image.new("RGBA", (size, size), (245, 245, 245, 255))
+        draw = ImageDraw.Draw(image)
+        draw.ellipse((1, 1, size - 2, size - 2), fill=(238, 242, 255, 255), outline=(220, 220, 230, 255))
+        draw.ellipse((11, 8, 23, 20), fill=(150, 160, 180, 255))
+        draw.rounded_rectangle((8, 20, 26, 30), radius=5, fill=(120, 130, 160, 255))
+        photo = ImageTk.PhotoImage(image)
+        label = tk.Label(parent, image=photo, bg=CARD)
+        label.image = photo  # type: ignore[attr-defined]
+        return label
 
     def start_convert(self) -> None:
         try:
@@ -1204,6 +1821,50 @@ class MemeGui(BaseTk):
             messagebox.showerror("参数错误", "行数和列数必须大于 0。")
             return
         self._run_job("拼图切图", run_split_sheet, args)
+
+    def start_stitch(self) -> None:
+        try:
+            text_plan = self.stitch_vars["xhs_plan"].get().strip()
+            plan_suffix = Path(text_plan).suffix.lower() if text_plan else ""
+            if text_plan and plan_suffix not in {".json", ".txt"}:
+                raise ValueError("文案文件只支持 xhs_plan.json 或 captions.txt；不需要字幕时请留空。")
+            xhs_plan = text_plan if plan_suffix == ".json" else None
+            captions = text_plan if text_plan and plan_suffix != ".json" else None
+            caption_height = int(self.stitch_vars["caption_height"].get().strip() or "0")
+            if text_plan and caption_height <= 0:
+                caption_height = 180
+            args = argparse.Namespace(
+                input=self.stitch_vars["input"].get().strip(),
+                output=self.stitch_vars["output"].get().strip(),
+                template="xhs",
+                cell_size=int(self.stitch_vars["cell_size"].get().strip()),
+                gutter=int(self.stitch_vars["gutter"].get().strip()),
+                bg="#ffffff",
+                format=self.stitch_vars["format"].get().strip(),
+                trim=True,
+                captions=captions,
+                xhs_plan=xhs_plan,
+                caption_height=caption_height,
+                caption_font="auto",
+                caption_font_size=int(self.stitch_vars["caption_font_size"].get().strip() or "64"),
+                caption_min_font_size=28,
+                caption_margin_x=80,
+                caption_color="#000000",
+                command="stitch-vertical",
+            )
+        except Exception as exc:
+            messagebox.showerror("参数错误", str(exc))
+            return
+        if not args.input:
+            messagebox.showerror("参数错误", "请先选择多张图片或图片文件夹。")
+            return
+        if args.cell_size <= 0 or args.gutter < 0:
+            messagebox.showerror("参数错误", "输出宽度必须大于 0，上下间隔不能小于 0。")
+            return
+        if not args.output:
+            first = Path(args.input.splitlines()[0]) if "\n" in args.input else Path(args.input)
+            args.output = str(self._suggest_output("stitch", first))
+        self._run_job("小红书组图", run_stitch_vertical, args)
 
 
 def main() -> None:
