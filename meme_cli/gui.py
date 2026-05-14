@@ -515,6 +515,8 @@ class MemeGui(BaseTk):
         ).grid(row=3, column=1, sticky="w", padx=(8, 0), pady=(4, 0))
         fields.grid_columnconfigure(1, weight=1)
 
+        self._build_mode_action(body, mode="stitch", idle_text="请先选择多张图片", action_text="开始组图", command=self.start_stitch)
+
         preview = TogglePanel(body, "发布预览设置", bg=CARD)
         preview.pack(fill="x", pady=(12, 0))
         tk.Checkbutton(
@@ -537,7 +539,6 @@ class MemeGui(BaseTk):
         self._labeled_entry(post_fields, "内容", self.stitch_vars["post_content"], row=3)
         self._labeled_entry(post_fields, "标签", self.stitch_vars["post_tags"], row=4)
 
-        self._build_mode_action(body, mode="stitch", idle_text="请先选择多张图片", action_text="开始组图", command=self.start_stitch)
         return outer
 
     def _build_mode_action(self, parent: tk.Frame, *, mode: str, idle_text: str, action_text: str, command) -> None:
@@ -1633,49 +1634,60 @@ class MemeGui(BaseTk):
         image_host.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
         image_host.grid_rowconfigure(0, weight=1)
         image_host.grid_columnconfigure(0, weight=1)
-        canvas = tk.Canvas(image_host, bg="#F8F8F8", highlightthickness=0)
-        scroll = ttk.Scrollbar(image_host, orient="horizontal", command=canvas.xview)
-        canvas.configure(xscrollcommand=scroll.set)
-        canvas.grid(row=0, column=0, sticky="nsew")
-        scroll.grid(row=1, column=0, sticky="ew")
+        image_area = tk.Frame(image_host, bg="#F8F8F8")
+        image_area.grid(row=0, column=0, sticky="nsew")
+        image_area.grid_rowconfigure(0, weight=1)
+        image_area.grid_columnconfigure(1, weight=1)
 
-        x = 20
-        max_h = 670
-        page_w = 720
-        dot_y = max_h + 36
-        for idx, path in enumerate(image_paths, start=1):
+        image_label = tk.Label(image_area, bg="#F8F8F8")
+        image_label.grid(row=0, column=1, sticky="nsew", padx=8, pady=12)
+        prev_btn = tk.Button(image_area, text="‹", bg="#EFEFEF", fg=TEXT, activebackground=PINK_SOFT, relief="flat", bd=0, width=3, font=("Microsoft YaHei UI", 22, "bold"), cursor="hand2")
+        next_btn = tk.Button(image_area, text="›", bg="#EFEFEF", fg=TEXT, activebackground=PINK_SOFT, relief="flat", bd=0, width=3, font=("Microsoft YaHei UI", 22, "bold"), cursor="hand2")
+        prev_btn.grid(row=0, column=0, sticky="ns", padx=(10, 0), pady=260)
+        next_btn.grid(row=0, column=2, sticky="ns", padx=(0, 10), pady=260)
+        pager = tk.Label(image_host, bg="#F8F8F8", fg=TEXT_SOFT, font=("Microsoft YaHei UI", 10, "bold"))
+        pager.grid(row=1, column=0, pady=(0, 10))
+
+        prepared_images: list[ImageTk.PhotoImage] = []
+        max_w = 640
+        max_h = 660
+        for path in image_paths:
             try:
                 with Image.open(path) as image:
                     frame = image.convert("RGBA")
-                    frame.thumbnail((page_w - 40, max_h), Image.Resampling.LANCZOS)
+                    frame.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
                     photo = ImageTk.PhotoImage(frame)
             except Exception:
                 continue
-            win._image_refs.append(photo)  # type: ignore[attr-defined]
-            image_x = x + (page_w - photo.width()) // 2
-            image_y = 18 + max(0, (max_h - photo.height()) // 2)
-            canvas.create_image(image_x, image_y, image=photo, anchor="nw")
-            canvas.create_text(x + page_w - 22, 28, text=f"{idx}/{len(image_paths)}", anchor="e", fill="#777777", font=("Microsoft YaHei UI", 10, "bold"))
-            x += page_w
-        total_w = max(page_w, x)
-        canvas.configure(scrollregion=(0, 0, total_w, max_h + 70))
-        dots = " ".join("●" for _ in image_paths)
-        canvas.create_text(page_w // 2, dot_y, text=dots, fill="#CFCFCF", font=("Microsoft YaHei UI", 12), tags="pager_dots")
+            prepared_images.append(photo)
+        win._image_refs = prepared_images  # type: ignore[attr-defined]
+        current_index = tk.IntVar(value=0)
 
-        def on_wheel(event) -> None:
-            canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        canvas.bind("<MouseWheel>", on_wheel)
+        def render_page() -> None:
+            if not prepared_images:
+                image_label.configure(image="", text="图片加载失败", fg=TEXT_SOFT, font=("Microsoft YaHei UI", 14))
+                pager.configure(text="")
+                return
+            index = current_index.get()
+            image_label.configure(image=prepared_images[index], text="")
+            dots = " ".join("●" if i == index else "○" for i in range(len(prepared_images)))
+            pager.configure(text=f"{index + 1}/{len(prepared_images)}   {dots}")
+            prev_btn.configure(state="normal" if index > 0 else "disabled")
+            next_btn.configure(state="normal" if index < len(prepared_images) - 1 else "disabled")
 
         def jump_page(delta: int) -> None:
-            left = canvas.xview()[0]
-            current = round(left * total_w / page_w)
-            target = min(max(0, current + delta), max(0, len(image_paths) - 1))
-            canvas.xview_moveto((target * page_w) / total_w)
+            if not prepared_images:
+                return
+            target = min(max(0, current_index.get() + delta), len(prepared_images) - 1)
+            current_index.set(target)
+            render_page()
 
-        canvas.bind("<Left>", lambda _event: jump_page(-1))
-        canvas.bind("<Right>", lambda _event: jump_page(1))
-        canvas.focus_set()
+        prev_btn.configure(command=lambda: jump_page(-1))
+        next_btn.configure(command=lambda: jump_page(1))
+        win.bind("<Left>", lambda _event: jump_page(-1))
+        win.bind("<Right>", lambda _event: jump_page(1))
+        win.bind("<MouseWheel>", lambda event: jump_page(1 if event.delta < 0 else -1))
+        render_page()
 
         side = tk.Frame(shell, bg=CARD)
         side.grid(row=0, column=1, sticky="nsew")
