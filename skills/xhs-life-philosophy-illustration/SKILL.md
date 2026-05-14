@@ -1,6 +1,6 @@
 ---
 name: xhs-life-philosophy-illustration
-description: Generate Xiaohongshu-style life/work philosophy illustration packages from a theme. Use when Codex needs to create Chinese caption slices, choose or confirm a dynamic recurring subject style, write no-text image prompts for a 3x3 grid or nine individual square stickers, and output files compatible with meme-cli/xhs-plan caption stitching.
+description: Generate Xiaohongshu-style life/work philosophy illustration packages from a theme. Use when Codex needs to create Chinese caption slices, choose or confirm a dynamic recurring subject style, write no-text image prompts for a 3x3 grid or nine individual square stickers, and output files compatible with meme-workshop/xhs-plan caption stitching.
 ---
 
 # Xiaohongshu Life Philosophy Illustration
@@ -14,16 +14,16 @@ description: Generate Xiaohongshu-style life/work philosophy illustration packag
 5. Create an image plan:
    - Prefer one no-text 3x3 grid image when the user wants a single generated asset.
    - Use nine independent square sticker prompts when grid cutting quality matters more than generation convenience.
-   - Never ask the image model to render Chinese captions. Captions are added later by `meme-cli`.
+   - Never ask the image model to render Chinese captions. Captions are added later by `meme-workshop`.
 6. Save a project package containing:
    - `hook.txt`: one short Xiaohongshu title hook.
    - `tags.txt`: fixed Xiaohongshu topic tags.
    - `post_copy.txt`: hook + fixed tags, ready to paste.
    - `captions.txt`: one caption per line, ordered left-to-right, top-to-bottom.
-   - `xhs_plan.json`: caption and rendering metadata accepted by `meme-cli stitch-vertical --xhs-plan`.
+   - `xhs_plan.json`: caption and rendering metadata accepted by `meme-workshop stitch-vertical --xhs-plan`.
    - `image_prompt_grid.txt`: no-text prompt for a 3x3 source image.
    - `image_prompt_individual.txt`: nine no-text per-cell prompts.
-7. After image generation and grid cutting, call `meme-cli` like:
+7. After image generation and grid cutting, call `meme-workshop` like:
 
 ```powershell
 python -m meme_cli.cli split-sheet source_grid.png tiles --rows 3 --cols 3 --size raw --format png

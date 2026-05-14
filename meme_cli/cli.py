@@ -771,7 +771,7 @@ def write_manifest(output_root: Path, entries: Iterable[ManifestEntry], dry_run:
     entries = list(entries)
     manifest_path = output_root / "manifest.json"
     payload = {
-        "tool": "meme-cli",
+        "tool": "meme-workshop",
         "dry_run": dry_run,
         "count": len(entries),
         "items": [asdict(item) for item in entries],
@@ -843,7 +843,7 @@ def summarize(entries: Iterable[ManifestEntry], failures: Iterable[FailureEntry]
     avg_bytes = round(total_bytes / len(ok_items), 2) if ok_items else 0
 
     return {
-        "tool": "meme-cli",
+        "tool": "meme-workshop",
         "dry_run": dry_run,
         "totals": {
             "entries": len(entry_list),
@@ -1487,7 +1487,7 @@ def run_stitch_vertical(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="meme-cli", description="Batch convert images into WeChat-friendly meme assets")
+    parser = argparse.ArgumentParser(prog="meme-workshop", description="Local meme and Xiaohongshu collage workshop")
     sub = parser.add_subparsers(dest="command", required=True)
 
     convert = sub.add_parser("convert", help="Convert one image or a whole directory")

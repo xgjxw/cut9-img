@@ -660,7 +660,7 @@ class MemeGui(BaseTk):
         return page
 
     def _output_root(self) -> Path:
-        return Path(tempfile.gettempdir()) / "meme-cli-output"
+        return Path(tempfile.gettempdir()) / "meme-workshop-output"
 
     def _on_output_mousewheel(self, event) -> None:
         if self._output_canvas is not None and getattr(event, "delta", 0):
@@ -1335,7 +1335,7 @@ class MemeGui(BaseTk):
         stem = path.name if path.is_dir() else path.stem
         suffix = "gif" if mode == "convert" else "stitch" if mode == "stitch" else "split"
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        return Path(tempfile.gettempdir()) / "meme-cli-output" / f"{stem}_{suffix}_{stamp}"
+        return Path(tempfile.gettempdir()) / "meme-workshop-output" / f"{stem}_{suffix}_{stamp}"
 
     def _count_stitch_inputs(self, value: str) -> int:
         path = Path(value) if "\n" not in value else None
@@ -1469,7 +1469,7 @@ class MemeGui(BaseTk):
         return None
 
     def _save_clipboard_image(self, image: Image.Image, mode: str) -> Path:
-        temp_dir = Path(tempfile.gettempdir()) / "meme-cli-paste"
+        temp_dir = Path(tempfile.gettempdir()) / "meme-workshop-paste"
         temp_dir.mkdir(parents=True, exist_ok=True)
         target = temp_dir / f"{mode}-{time.strftime('%Y%m%d-%H%M%S')}.png"
         image.convert("RGBA").save(target, format="PNG")

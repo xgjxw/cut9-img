@@ -3,17 +3,19 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "meme-cli"
+name = "meme-workshop"
 version = "0.1.0"
-description = "Batch convert images into WeChat-friendly meme assets."
+description = "Local meme and Xiaohongshu collage workshop."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["Pillow>=10", "tkinterdnd2>=0.4.3", "pycryptodome>=3.20"]
 
 [project.scripts]
+meme-workshop = "meme_cli.cli:main"
 meme-cli = "meme_cli.cli:main"
 
 [project.gui-scripts]
+meme-workshop-gui = "meme_cli.gui:main"
 meme-gui = "meme_cli.gui:main"
 
 [tool.setuptools]

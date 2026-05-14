@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: Build 九宫格切图器.exe
+    name: Build 表情包工坊.exe
     runs-on: windows-latest
 
     steps:
@@ -35,27 +35,27 @@ jobs:
         shell: powershell
         run: |
           python -m py_compile meme_cli\cli.py meme_cli\gui.py
+          python -m py_compile skills\xhs-life-philosophy-illustration\scripts\create_xhs_project.py
 
       - name: Build EXE
         shell: cmd
         run: build_gui_exe.bat
 
-      - name: Rename EXE
+      - name: Prepare release assets
         shell: powershell
         run: |
-          python -c "from pathlib import Path; import shutil; target = Path('dist') / '\u4e5d\u5bab\u683c\u5207\u56fe\u5668.exe'; shutil.copyfile(Path('dist') / 'meme-gui.exe', target)"
-          Copy-Item -LiteralPath .\dist\meme-gui.exe -Destination .\dist\cut9-img-windows.exe -Force
-          Remove-Item -LiteralPath .\dist\meme-gui.exe -Force
+          Copy-Item -LiteralPath .\dist\meme-workshop.exe -Destination .\dist\meme-workshop-windows.exe -Force
           Get-ChildItem -LiteralPath .\dist
-          Get-FileHash -LiteralPath .\dist\cut9-img-windows.exe -Algorithm SHA256
+          Get-FileHash -LiteralPath .\dist\meme-workshop-windows.exe -Algorithm SHA256
+          Get-FileHash -LiteralPath .\dist\表情包工坊.exe -Algorithm SHA256
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cut9-img-windows-exe
+          name: meme-workshop-windows-exe
           path: |
-            dist/cut9-img-windows.exe
-            dist/*.exe
+            dist/meme-workshop-windows.exe
+            dist/表情包工坊.exe
           if-no-files-found: error
 
       - name: Publish build release
@@ -63,12 +63,14 @@ jobs:
         with:
           token: ${{ github.token }}
           tag: build-${{ github.run_number }}
-          name: Windows EXE build ${{ github.run_number }}
+          name: 表情包工坊 Windows EXE build ${{ github.run_number }}
           body: |
             自动构建的 Windows 可执行文件。
 
             Commit: ${{ github.sha }}
             Workflow run: ${{ github.run_number }}
-          artifacts: dist/cut9-img-windows.exe
+          artifacts: |
+            dist/meme-workshop-windows.exe
+            dist/表情包工坊.exe
           allowUpdates: false
           makeLatest: true

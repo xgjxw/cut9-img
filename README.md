@@ -161,7 +161,7 @@ dist/表情包工坊.exe
 ## 项目结构
 
 ```text
-meme-cli/
+meme-workshop/
   meme_cli/
     cli.py          # CLI 与图片处理核心逻辑
     gui.py          # Tkinter GUI
