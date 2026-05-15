@@ -14,7 +14,5 @@ python -m PyInstaller ^
 
 echo.
 echo Build finished.
-copy /Y "%~dp0dist\meme-workshop.exe" "%~dp0dist\表情包工坊.exe" >nul
 echo EXE: %~dp0dist\meme-workshop.exe
-echo EXE: %~dp0dist\表情包工坊.exe
 endlocal

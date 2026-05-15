@@ -11,12 +11,14 @@ permissions:
 
 jobs:
   build:
-    name: Build 表情包工坊.exe
+    name: Build meme-workshop exe
     runs-on: windows-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -47,30 +49,37 @@ jobs:
           Copy-Item -LiteralPath .\dist\meme-workshop.exe -Destination .\dist\meme-workshop-windows.exe -Force
           Get-ChildItem -LiteralPath .\dist
           Get-FileHash -LiteralPath .\dist\meme-workshop-windows.exe -Algorithm SHA256
-          Get-FileHash -LiteralPath .\dist\表情包工坊.exe -Algorithm SHA256
 
-      - name: Upload EXE artifact
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: meme-workshop-windows-exe
-          path: |
-            dist/meme-workshop-windows.exe
-            dist/表情包工坊.exe
+          path: dist/meme-workshop-windows.exe
           if-no-files-found: error
 
-      - name: Publish build release
-        uses: ncipollo/release-action@v1
-        with:
-          token: ${{ github.token }}
-          tag: build-${{ github.run_number }}
-          name: 表情包工坊 Windows EXE build ${{ github.run_number }}
-          body: |
-            自动构建的 Windows 可执行文件。
+      - name: Publish latest GitHub Release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: windows-latest
+          RELEASE_NAME: Meme Workshop Windows Latest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f $env:TAG_NAME $env:GITHUB_SHA
+          git push -f origin $env:TAG_NAME
 
-            Commit: ${{ github.sha }}
-            Workflow run: ${{ github.run_number }}
-          artifacts: |
-            dist/meme-workshop-windows.exe
-            dist/表情包工坊.exe
-          allowUpdates: false
-          makeLatest: true
+          @"
+          Automatic Windows executable build.
+          - File: meme-workshop-windows.exe
+          - Commit: $env:GITHUB_SHA
+          - Workflow run: $env:GITHUB_RUN_NUMBER
+          "@ | Set-Content -LiteralPath release-notes.md -Encoding UTF8
+
+          gh release view $env:TAG_NAME *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:TAG_NAME .\dist\meme-workshop-windows.exe --title $env:RELEASE_NAME --notes-file release-notes.md --latest
+          } else {
+            gh release upload $env:TAG_NAME .\dist\meme-workshop-windows.exe --clobber
+            gh release edit $env:TAG_NAME --title $env:RELEASE_NAME --notes-file release-notes.md --latest
+          }

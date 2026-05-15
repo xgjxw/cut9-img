@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import uuid
+from datetime import datetime
 from pathlib import Path
 
 
@@ -11,6 +14,8 @@ STYLE_DESCRIPTIONS = {
     "round-office-worker": "simple cute office worker, round white face, orange sweater, black line limbs, minimal sticker cartoon style, soft thick outline",
     "zen-rabbit": "small white rabbit with orange vest, calm face, expressive long ears, soft pastel sticker style, clean black outline",
     "tiny-robot": "small friendly robot, white body with orange accents, simple screen face, office and life props, minimal futuristic sticker style",
+    "crayon-shinchan": "custom protagonist inspired by Crayon Shin-chan, mischievous five-year-old boy, thick eyebrows, round cheeks, red shirt, yellow shorts, white socks, playful expressive poses; scenes should match the original slice-of-life tone with home, kindergarten, playground, family room, toy box, snacks, crayons, warm childhood innocence",
+    "doraemon": "custom protagonist inspired by Doraemon, round blue robotic cat, white face and belly, red nose, bell collar, small tail, front pocket with small symbolic props; scenes should match the original gentle sci-fi school-life tone with tatami room, study desk, drawer, neighborhood street, school bag, simple future gadgets, friendship and childhood wish fulfillment",
 }
 
 
@@ -50,7 +55,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Create a Xiaohongshu philosophy illustration project package.")
     parser.add_argument("--theme", required=True, help="Chinese topic/theme")
     parser.add_argument("--style", choices=sorted(STYLE_DESCRIPTIONS), required=True, help="Subject style id")
-    parser.add_argument("--output", required=True, help="Output project directory")
+    parser.add_argument("--output", default="xhs_projects", help="Output root directory. A unique project subdirectory is created by default.")
+    parser.add_argument("--project-id", default=None, help="Optional stable project id. Defaults to timestamp + short uuid.")
+    parser.add_argument("--flat-output", action="store_true", help="Write directly into --output instead of creating an isolated project subdirectory.")
     parser.add_argument("--captions", default=None, help="Optional UTF-8 txt file, one caption per line")
     parser.add_argument("--hook", default=DEFAULT_HOOK, help="Short Xiaohongshu title hook")
     parser.add_argument("--caption-height", type=int, default=180)
@@ -58,6 +65,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--caption-min-font-size", type=int, default=28)
     parser.add_argument("--caption-margin-x", type=int, default=80)
     return parser.parse_args()
+
+
+def slugify(value: str, max_len: int = 32) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "-", value.strip())
+    slug = re.sub(r"-{2,}", "-", slug).strip("-_")
+    return (slug or "xhs")[:max_len]
+
+
+def make_project_id(theme: str, style: str) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    short_uuid = uuid.uuid4().hex[:8]
+    return f"{slugify(style, 24)}_{timestamp}_{short_uuid}"
+
+
+def prepare_output(root: str, project_id: str, flat_output: bool) -> Path:
+    output_root = Path(root).expanduser().resolve()
+    output = output_root if flat_output else output_root / project_id
+    output.mkdir(parents=True, exist_ok=False)
+    return output
 
 
 def load_captions(path: str | None) -> list[str]:
@@ -139,12 +165,14 @@ Leave large empty margin; show the full character; soft black outline; pastel co
 
 def main() -> int:
     args = parse_args()
-    output = Path(args.output).expanduser().resolve()
-    output.mkdir(parents=True, exist_ok=True)
+    project_id = args.project_id or make_project_id(args.theme, args.style)
+    output = prepare_output(args.output, project_id, args.flat_output)
     captions = load_captions(args.captions)
 
     plan = {
         "schema": "xhs-life-philosophy-plan/v1",
+        "project_id": project_id,
+        "output_dir": str(output),
         "theme": args.theme,
         "style": args.style,
         "hook": args.hook,
@@ -171,6 +199,46 @@ def main() -> int:
     (output / "xhs_plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     (output / "image_prompt_grid.txt").write_text(build_grid_prompt(args.theme, args.style, captions), encoding="utf-8")
     (output / "image_prompt_individual.txt").write_text(build_individual_prompts(args.theme, args.style, captions), encoding="utf-8")
+    (output / "result_summary.json").write_text(
+        json.dumps(
+            {
+                "schema": "xhs-life-philosophy-result-summary/v1",
+                "project_id": project_id,
+                "title": args.hook.strip(),
+                "tags": FIXED_TAGS,
+                "copywriting_json_path": str((output / "xhs_plan.json").resolve()),
+                "prompt_grid_path": str((output / "image_prompt_grid.txt").resolve()),
+                "prompt_individual_path": str((output / "image_prompt_individual.txt").resolve()),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (output / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema": "xhs-life-philosophy-manifest/v1",
+                "project_id": project_id,
+                "theme": args.theme,
+                "style": args.style,
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+                "files": [
+                    "hook.txt",
+                    "tags.txt",
+                    "post_copy.txt",
+                    "captions.txt",
+                    "xhs_plan.json",
+                    "result_summary.json",
+                    "image_prompt_grid.txt",
+                    "image_prompt_individual.txt",
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     print(output)
     return 0
 

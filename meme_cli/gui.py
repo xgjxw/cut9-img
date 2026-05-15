@@ -517,27 +517,10 @@ class MemeGui(BaseTk):
 
         self._build_mode_action(body, mode="stitch", idle_text="请先选择多张图片", action_text="开始组图", command=self.start_stitch)
 
-        preview = TogglePanel(body, "发布预览设置", bg=CARD)
-        preview.pack(fill="x", pady=(12, 0))
-        tk.Checkbutton(
-            preview.body,
-            text="完成后打开小红书发布预览",
-            variable=self.stitch_vars["preview_enabled"],
-            bg=LAVENDER,
-            fg=TEXT,
-            activebackground=LAVENDER,
-            selectcolor=LAVENDER,
-            font=("Microsoft YaHei UI", 10, "bold"),
-        ).pack(anchor="w", pady=(0, 8))
-        post_fields = tk.Frame(preview.body, bg=LAVENDER)
-        post_fields.pack(fill="x")
-        for idx in range(2):
-            post_fields.grid_columnconfigure(idx, weight=1 if idx == 1 else 0)
-        self._labeled_entry(post_fields, "作者名", self.stitch_vars["post_author"], row=0)
-        self._labeled_entry(post_fields, "头像", self.stitch_vars["post_avatar"], row=1, button=("选择", self._choose_post_avatar))
-        self._labeled_entry(post_fields, "标题", self.stitch_vars["post_title"], row=2)
-        self._labeled_entry(post_fields, "内容", self.stitch_vars["post_content"], row=3)
-        self._labeled_entry(post_fields, "标签", self.stitch_vars["post_tags"], row=4)
+        preview_row = tk.Frame(body, bg=CARD)
+        preview_row.pack(fill="x", pady=(12, 0))
+        self._small_button(preview_row, "发布预览设置", self._open_publish_preview_settings, bg=SIDEBAR_BG).pack(side="left")
+        tk.Label(preview_row, text="设置作者、标题、内容、标签和头像", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).pack(side="left", padx=(10, 0))
 
         return outer
 
@@ -700,6 +683,8 @@ class MemeGui(BaseTk):
             summary.pack(anchor="w", pady=(3, 0))
             if info["kind"] == "切图":
                 self._small_button(actions, "组图", lambda p=path: self._use_output_dir_for_stitch(p), bg=GREEN).pack(side="left", padx=(0, 6))
+            elif info["kind"] == "小红书组图":
+                self._small_button(actions, "预览", lambda p=path: self._show_xhs_publish_preview(p), bg=GREEN).pack(side="left", padx=(0, 6))
             delete_btn = tk.Button(
                 actions,
                 text="❌",
@@ -739,7 +724,7 @@ class MemeGui(BaseTk):
         name = path.name
         image_files = self._list_preview_images(path)
         count = len(image_files)
-        kind = "切图" if "_split_" in name else "组图" if "_stitch_" in name else "制作" if "_gif_" in name or "_convert_" in name else "输出"
+        kind = "小红书组图" if "_stitch_" in name else "切图" if "_split_" in name else "制作" if "_gif_" in name or "_convert_" in name else "输出"
         stamp_match = re.search(r"(20\d{6}-\d{6})", name)
         if stamp_match:
             raw = stamp_match.group(1)
@@ -810,7 +795,7 @@ class MemeGui(BaseTk):
         self.after(60, lambda: self._flash_toast("已把这个切图目录放入组图器，可以直接开始组图。"))
 
     def _extract_output_token(self, name: str, kind: str) -> str:
-        marker = "_split_" if kind == "切图" else "_stitch_" if kind == "组图" else "_gif_" if "_gif_" in name else "_convert_"
+        marker = "_stitch_" if kind == "小红书组图" else "_split_" if kind == "切图" else "_gif_" if "_gif_" in name else "_convert_"
         token = name.split(marker, 1)[0] if marker in name else name
         token = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_-]+", "", token).strip("_-")
         if not token:
@@ -930,12 +915,13 @@ class MemeGui(BaseTk):
         *,
         row: int,
         button: tuple[str, object] | None = None,
+        entry_bg: str = CARD,
     ) -> None:
         tk.Label(parent, text=label, bg=parent.cget("bg"), fg=TEXT, font=("Microsoft YaHei UI", 10)).grid(row=row, column=0, sticky="w", pady=(0, 8))
         wrap = tk.Frame(parent, bg=parent.cget("bg"))
         wrap.grid(row=row, column=1, sticky="ew", padx=(8, 0), pady=(0, 8))
         wrap.grid_columnconfigure(0, weight=1)
-        tk.Entry(wrap, textvariable=variable, relief="flat", bd=0, bg=CARD, fg=TEXT).grid(row=0, column=0, sticky="ew", ipady=6)
+        tk.Entry(wrap, textvariable=variable, relief="flat", bd=0, bg=entry_bg, fg=TEXT, insertbackground=TEXT).grid(row=0, column=0, sticky="ew", ipady=7)
         if button:
             self._small_button(wrap, button[0], button[1], bg=CARD).grid(row=0, column=1, padx=(8, 0))
 
@@ -1129,7 +1115,7 @@ class MemeGui(BaseTk):
 
     def _show_split_output_picker(self) -> None:
         root = self._output_root()
-        dirs = [p for p in root.iterdir() if p.is_dir() and "_split_" in p.name] if root.exists() else []
+        dirs = [p for p in root.iterdir() if p.is_dir() and "_split_" in p.name and "_stitch_" not in p.name] if root.exists() else []
         dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
 
         win = tk.Toplevel(self)
@@ -1170,8 +1156,19 @@ class MemeGui(BaseTk):
         window = canvas.create_window((0, 0), window=content, anchor="nw")
         content.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
-        canvas.bind("<Enter>", lambda _event: win.bind_all("<MouseWheel>", lambda event: canvas.yview_scroll(int(-1 * (event.delta / 120)), "units"), add=True))
-        canvas.bind("<Leave>", lambda _event: win.unbind_all("<MouseWheel>"))
+
+        def on_picker_mousewheel(event: tk.Event) -> str:
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                return "break"
+            return "break"
+
+        # Bind on the picker toplevel instead of bind_all. bind_all keeps a
+        # reference to this canvas after the window is closed and can fire
+        # against a destroyed Tcl widget.
+        win.bind("<MouseWheel>", on_picker_mousewheel)
 
         if not dirs:
             tk.Label(content, text="还没有九宫格切图结果。请先完成一次切图。", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 11)).pack(anchor="w", pady=20)
@@ -1239,6 +1236,55 @@ class MemeGui(BaseTk):
         if path:
             self.stitch_vars["post_avatar"].set(path)
 
+    def _open_publish_preview_settings(self) -> None:
+        win = tk.Toplevel(self)
+        win.title("发布预览设置")
+        win.geometry("600x520")
+        win.minsize(540, 480)
+        win.configure(bg=BG)
+        win.transient(self)
+        win.grab_set()
+
+        outer, body = make_card(win, bg=CARD, border=LINE, padx=24, pady=18)
+        outer.pack(fill="both", expand=True, padx=18, pady=18)
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_rowconfigure(2, weight=1)
+
+        head = tk.Frame(body, bg=CARD)
+        head.grid(row=0, column=0, sticky="ew")
+        tk.Label(head, text="发布预览设置", bg=CARD, fg=TEXT, font=("Microsoft YaHei UI", 18, "bold")).pack(side="left")
+        self._small_button(head, "完成", win.destroy, bg=GREEN).pack(side="right")
+        tk.Label(body, text="这里的内容只用于小红书发布预览，不影响图片生成。", bg=CARD, fg=TEXT_SOFT, font=("Microsoft YaHei UI", 9)).grid(row=1, column=0, sticky="w", pady=(8, 14))
+
+        form = tk.Frame(body, bg=CARD)
+        form.grid(row=2, column=0, sticky="nsew")
+        form.grid_columnconfigure(0, weight=1)
+
+        tk.Checkbutton(
+            form,
+            text="组图完成后自动打开小红书发布预览",
+            variable=self.stitch_vars["preview_enabled"],
+            bg=CARD,
+            fg=TEXT,
+            activebackground=CARD,
+            selectcolor=CARD,
+            font=("Microsoft YaHei UI", 10, "bold"),
+        ).pack(anchor="w", pady=(0, 12))
+
+        fields = tk.Frame(form, bg=CARD)
+        fields.pack(fill="x")
+        fields.grid_columnconfigure(1, weight=1)
+        self._labeled_entry(fields, "作者名", self.stitch_vars["post_author"], row=0, entry_bg=MINT)
+        self._labeled_entry(fields, "头像", self.stitch_vars["post_avatar"], row=1, button=("选择", self._choose_post_avatar), entry_bg=MINT)
+        self._labeled_entry(fields, "标题", self.stitch_vars["post_title"], row=2, entry_bg=MINT)
+        self._labeled_entry(fields, "内容", self.stitch_vars["post_content"], row=3, entry_bg=MINT)
+        self._labeled_entry(fields, "标签", self.stitch_vars["post_tags"], row=4, entry_bg=MINT)
+
+        bottom = tk.Frame(body, bg=CARD)
+        bottom.grid(row=3, column=0, sticky="ew", pady=(14, 0))
+        self._small_button(bottom, "打开最近预览", lambda: self._show_xhs_publish_preview(), bg=PINK_SOFT).pack(side="left")
+        self._small_button(bottom, "关闭", win.destroy, bg=SIDEBAR_BG).pack(side="right")
+
     def _copy_xhs_skill_prompt(self) -> None:
         skill_path = Path("skills") / "xhs-life-philosophy-illustration"
         prompt = f"""使用项目内小红书爆款插图 Skill：
@@ -1254,6 +1300,8 @@ class MemeGui(BaseTk):
    - round-office-worker：圆脸打工人
    - zen-rabbit：禅意兔子
    - tiny-robot：小机器人
+   - crayon-shinchan：蜡笔小新定制主体
+   - doraemon：哆啦A梦定制主体
 3. 生成 9 条短文案切片，每条对应一格图。
 4. 生成一张无字九宫格生图提示词，不要让图片模型生成中文文字。
 5. 同时生成九张单独方图提示词。

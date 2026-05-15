@@ -113,6 +113,8 @@ Skill 当前内置这些主体：
 | `round-office-worker` | 圆脸打工人，适合泛职场主题 |
 | `zen-rabbit` | 禅意兔子，适合人生哲学、情绪稳定 |
 | `tiny-robot` | 小机器人，适合 AI、效率、信息过载 |
+| `crayon-shinchan` | 蜡笔小新定制主体，适合童年回忆、反差治愈 |
+| `doraemon` | 哆啦A梦定制主体，适合童年梦想、友情陪伴、治愈幻想 |
 
 ## CLI 示例
 
