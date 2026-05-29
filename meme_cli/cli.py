@@ -309,6 +309,24 @@ def wrap_caption_text(text: str, font: ImageFont.ImageFont, max_width: int) -> l
     return lines or [""]
 
 
+def scale_box(box: list[float] | tuple[float, float, float, float], width: int, height: int, *, base_width: int, base_height: int) -> tuple[int, int, int, int]:
+    x1, y1, x2, y2 = box
+    return (
+        int(round(float(x1) * width / base_width)),
+        int(round(float(y1) * height / base_height)),
+        int(round(float(x2) * width / base_width)),
+        int(round(float(y2) * height / base_height)),
+    )
+
+
+def scale_point(point: list[float] | tuple[float, float], width: int, height: int, *, base_width: int, base_height: int) -> tuple[int, int]:
+    x, y = point
+    return (
+        int(round(float(x) * width / base_width)),
+        int(round(float(y) * height / base_height)),
+    )
+
+
 def fit_caption_font(
     text: str,
     *,
@@ -334,6 +352,138 @@ def fit_caption_font(
 
     font = ImageFont.truetype(str(font_path), min_size) if font_path else ImageFont.load_default(size=min_size)
     return font, wrap_caption_text(text, font, max_width), max(1, round(min_size * 1.22))
+
+
+def fit_text_in_box(
+    text: str,
+    *,
+    font_path: Path | None,
+    max_width: int,
+    max_height: int,
+    start_size: int,
+    min_size: int,
+) -> tuple[ImageFont.ImageFont, list[str], int]:
+    return fit_caption_font(
+        text,
+        font_path=font_path,
+        max_width=max_width,
+        max_height=max_height,
+        start_size=start_size,
+        min_size=min_size,
+    )
+
+
+def draw_centered_text_box(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    text: str,
+    *,
+    font_path: Path | None,
+    font_size: int,
+    min_font_size: int,
+    fill: tuple[int, int, int],
+    padding: int = 18,
+    stroke_fill: tuple[int, int, int] | None = None,
+    stroke_width: int = 0,
+) -> None:
+    x1, y1, x2, y2 = box
+    max_width = max(1, x2 - x1 - padding * 2)
+    max_height = max(1, y2 - y1 - padding * 2)
+    font, lines, line_height = fit_text_in_box(
+        text,
+        font_path=font_path,
+        max_width=max_width,
+        max_height=max_height,
+        start_size=font_size,
+        min_size=min_font_size,
+    )
+    total_height = line_height * len(lines)
+    y = y1 + max(0, (y2 - y1 - total_height) // 2)
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        text_width = bbox[2] - bbox[0]
+        x = x1 + (x2 - x1 - text_width) // 2
+        kwargs = {}
+        if stroke_fill is not None and stroke_width > 0:
+            kwargs["stroke_width"] = stroke_width
+            kwargs["stroke_fill"] = (*stroke_fill, 255)
+        draw.text((x, y), line, font=font, fill=(*fill, 255), **kwargs)
+        y += line_height
+
+
+def draw_stroke_text_box(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    text: str,
+    *,
+    font_path: Path | None,
+    font_size: int,
+    min_font_size: int,
+    fill: tuple[int, int, int],
+    stroke_fill: tuple[int, int, int],
+    stroke_width: int,
+    padding: int = 0,
+) -> None:
+    draw_centered_text_box(
+        draw,
+        box,
+        text,
+        font_path=font_path,
+        font_size=font_size,
+        min_font_size=min_font_size,
+        fill=fill,
+        padding=padding,
+        stroke_fill=stroke_fill,
+        stroke_width=stroke_width,
+    )
+
+
+def build_contact_sheet(images: list[Path], output_path: Path, *, thumb_width: int = 260, thumb_height: int = 550, gutter: int = 20) -> None:
+    if not images:
+        return
+    thumbs: list[Image.Image] = []
+    for image_path in images:
+        with Image.open(image_path) as image:
+            thumb = image.convert("RGB")
+            thumb.thumbnail((thumb_width, thumb_height), Image.Resampling.LANCZOS)
+            thumbs.append(thumb)
+
+    columns = len(thumbs)
+    canvas = Image.new("RGB", (columns * (thumb_width + gutter), thumb_height + 48), "white")
+    draw = ImageDraw.Draw(canvas)
+    label_font = ImageFont.truetype(str(find_default_caption_font()), 18) if find_default_caption_font() else ImageFont.load_default()
+    for idx, thumb in enumerate(thumbs, start=1):
+        x = (idx - 1) * (thumb_width + gutter) + 10
+        canvas.paste(thumb, (x, 35))
+        draw.text((x, 8), f"page {idx}", font=label_font, fill=(0, 0, 0))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(output_path, format="PNG", optimize=True)
+
+
+def draw_bubble_shape(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    *,
+    fill: tuple[int, int, int],
+    outline: tuple[int, int, int],
+    outline_width: int,
+    tail: list[tuple[int, int]] | None = None,
+) -> None:
+    draw.ellipse(box, fill=(*fill, 255), outline=(*outline, 255), width=outline_width)
+    if tail:
+        draw.polygon(tail, fill=(*fill, 255), outline=(*outline, 255))
+
+
+def draw_rounded_box(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    *,
+    radius: int,
+    fill: tuple[int, int, int],
+    outline: tuple[int, int, int],
+    outline_width: int,
+) -> None:
+    draw.rounded_rectangle(box, radius=radius, fill=(*fill, 255), outline=(*outline, 255), width=outline_width)
 
 
 def append_caption_area(
@@ -1486,6 +1636,195 @@ def run_stitch_vertical(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_overlay_bubbles(args: argparse.Namespace) -> int:
+    plan_path = Path(args.plan).expanduser().resolve()
+    if not plan_path.is_file():
+        raise FileNotFoundError(f"plan not found: {plan_path}")
+    payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("plan json must be an object")
+
+    pages = payload.get("pages")
+    if not isinstance(pages, list) or not pages:
+        raise ValueError("plan must include non-empty pages array")
+
+    defaults = payload.get("defaults", {})
+    if not isinstance(defaults, dict):
+        defaults = {}
+
+    base_width = int(payload.get("base_width", defaults.get("base_width", 864)))
+    base_height = int(payload.get("base_height", defaults.get("base_height", 1821)))
+    output_dir = Path(args.output).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    default_font = resolve_caption_font(str(defaults.get("font", "auto")))
+    default_fill = parse_hex_color(str(defaults.get("fill", "#faf9f6")))
+    default_outline = parse_hex_color(str(defaults.get("outline", "#121212")))
+    default_text = parse_hex_color(str(defaults.get("text_color", "#161616")))
+    default_text_stroke = defaults.get("text_stroke_color")
+    default_text_stroke_rgb = parse_hex_color(str(default_text_stroke)) if default_text_stroke else None
+    default_text_stroke_width = int(defaults.get("text_stroke_width", 0))
+    default_outline_width = int(defaults.get("outline_width", 3))
+    default_min_font_size = int(defaults.get("min_font_size", 18))
+    default_font_size = int(defaults.get("font_size", 30))
+    report: list[dict[str, object]] = []
+    generated_outputs: list[Path] = []
+
+    for index, page in enumerate(pages, start=1):
+        if not isinstance(page, dict):
+            raise ValueError("each page must be an object")
+        image_value = page.get("image")
+        if not isinstance(image_value, str) or not image_value.strip():
+            raise ValueError("page.image is required")
+        image_path = Path(image_value).expanduser()
+        if not image_path.is_absolute():
+            image_path = (plan_path.parent / image_path).resolve()
+        if not image_path.is_file():
+            raise FileNotFoundError(f"image not found: {image_path}")
+
+        output_name = page.get("output")
+        if not isinstance(output_name, str) or not output_name.strip():
+            output_name = f"page_{index:02d}.png"
+        target = output_dir / output_name
+        items = page.get("items", [])
+        if not isinstance(items, list):
+            raise ValueError("page.items must be a list")
+
+        with Image.open(image_path) as source:
+            canvas = source.convert("RGBA")
+        draw = ImageDraw.Draw(canvas)
+        width, height = canvas.size
+
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("overlay item must be an object")
+            kind = str(item.get("type", "bubble"))
+            text = str(item.get("text", ""))
+            box_value = item.get("box")
+            if not isinstance(box_value, list) or len(box_value) != 4:
+                raise ValueError("overlay item box must be [x1,y1,x2,y2]")
+            box = scale_box(box_value, width, height, base_width=base_width, base_height=base_height)
+            font_path = resolve_caption_font(str(item.get("font", defaults.get("font", "auto"))))
+            font_size = int(item.get("font_size", default_font_size))
+            min_font_size = int(item.get("min_font_size", default_min_font_size))
+            fill_rgb = parse_hex_color(str(item.get("fill", defaults.get("fill", "#faf9f6"))))
+            outline_rgb = parse_hex_color(str(item.get("outline", defaults.get("outline", "#121212"))))
+            text_rgb = parse_hex_color(str(item.get("text_color", defaults.get("text_color", "#161616"))))
+            text_stroke_color = item.get("text_stroke_color", default_text_stroke)
+            text_stroke_rgb = parse_hex_color(str(text_stroke_color)) if text_stroke_color else default_text_stroke_rgb
+            text_stroke_width = int(item.get("text_stroke_width", default_text_stroke_width))
+            outline_width = int(item.get("outline_width", default_outline_width))
+            padding = int(item.get("padding", 18))
+
+            if kind == "bubble":
+                tail_points = None
+                raw_tail = item.get("tail")
+                if isinstance(raw_tail, list) and raw_tail:
+                    tail_points = [
+                        scale_point(point, width, height, base_width=base_width, base_height=base_height)
+                        for point in raw_tail
+                    ]
+                draw_bubble_shape(
+                    draw,
+                    box,
+                    fill=fill_rgb,
+                    outline=outline_rgb,
+                    outline_width=outline_width,
+                    tail=tail_points,
+                )
+                draw_centered_text_box(
+                    draw,
+                    box,
+                    text,
+                    font_path=font_path or default_font,
+                    font_size=font_size,
+                    min_font_size=min_font_size,
+                    fill=text_rgb,
+                    padding=padding,
+                    stroke_fill=text_stroke_rgb,
+                    stroke_width=text_stroke_width,
+                )
+            elif kind == "caption_box":
+                radius = int(item.get("radius", 10))
+                draw_rounded_box(
+                    draw,
+                    box,
+                    radius=radius,
+                    fill=fill_rgb,
+                    outline=outline_rgb,
+                    outline_width=outline_width,
+                )
+                draw_centered_text_box(
+                    draw,
+                    box,
+                    text,
+                    font_path=font_path or default_font,
+                    font_size=font_size,
+                    min_font_size=min_font_size,
+                    fill=text_rgb,
+                    padding=padding,
+                    stroke_fill=text_stroke_rgb,
+                    stroke_width=text_stroke_width,
+                )
+            elif kind == "text":
+                draw_centered_text_box(
+                    draw,
+                    box,
+                    text,
+                    font_path=font_path or default_font,
+                    font_size=font_size,
+                    min_font_size=min_font_size,
+                    fill=text_rgb,
+                    padding=padding,
+                    stroke_fill=text_stroke_rgb,
+                    stroke_width=text_stroke_width,
+                )
+            elif kind == "paper_text":
+                paper_text_rgb = parse_hex_color(str(item.get("text_color", "#641414")))
+                draw_centered_text_box(
+                    draw,
+                    box,
+                    text,
+                    font_path=font_path or default_font,
+                    font_size=font_size,
+                    min_font_size=min_font_size,
+                    fill=paper_text_rgb,
+                    padding=padding,
+                    stroke_fill=text_stroke_rgb,
+                    stroke_width=text_stroke_width,
+                )
+            elif kind == "stroke_text":
+                resolved_stroke_rgb = text_stroke_rgb or (0, 0, 0)
+                resolved_stroke_width = text_stroke_width if text_stroke_width > 0 else 3
+                draw_stroke_text_box(
+                    draw,
+                    box,
+                    text,
+                    font_path=font_path or default_font,
+                    font_size=font_size,
+                    min_font_size=min_font_size,
+                    fill=text_rgb,
+                    stroke_fill=resolved_stroke_rgb,
+                    stroke_width=resolved_stroke_width,
+                    padding=padding,
+                )
+            else:
+                raise ValueError(f"unsupported overlay item type: {kind}")
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(target, format="PNG", optimize=True)
+        generated_outputs.append(target)
+        report.append({"input": str(image_path), "output": str(target), "items": len(items), "width": width, "height": height})
+        print(f"[ok] {image_path.name} -> {target.name}")
+
+    report_path = output_dir / "overlay_report.json"
+    report_path.write_text(json.dumps({"count": len(report), "items": report}, ensure_ascii=False, indent=2), encoding="utf-8")
+    build_contact_sheet(generated_outputs, output_dir / "review_contact_sheet.png")
+    print(f"done: pages={len(report)}")
+    print(f"report: {report_path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="meme-workshop", description="Local meme and Xiaohongshu collage workshop")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1545,6 +1884,10 @@ def build_parser() -> argparse.ArgumentParser:
     stitch.add_argument("--caption-margin-x", type=int, default=80, help="Horizontal caption margin in pixels")
     stitch.add_argument("--caption-color", default="#000000", help="Caption text color")
     stitch.set_defaults(trim=True)
+
+    overlay = sub.add_parser("overlay-bubbles", help="Overlay in-panel comic bubbles/text from a JSON plan")
+    overlay.add_argument("plan", help="Plan JSON file describing pages and bubble items")
+    overlay.add_argument("output", help="Output directory")
     return parser
 
 
@@ -1714,6 +2057,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_split_sheet(args)
     if args.command == "stitch-vertical":
         return run_stitch_vertical(args)
+    if args.command == "overlay-bubbles":
+        return run_overlay_bubbles(args)
     parser.print_help()
     return 1
 

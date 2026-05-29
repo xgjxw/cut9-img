@@ -1,0 +1,222 @@
+{
+  "base_width": 864,
+  "base_height": 1821,
+  "defaults": {
+    "font": "auto",
+    "font_size": 30,
+    "min_font_size": 18,
+    "fill": "#faf9f6",
+    "outline": "#121212",
+    "outline_width": 3,
+    "text_color": "#161616",
+    "text_stroke_color": "#000000",
+    "text_stroke_width": 0
+  },
+  "pages": [
+    {
+      "image": "C:/Users/Administrator/.codex/generated_images/019e72f1-e77b-7c81-8e7c-a41320b69ca3/ig_01d67ca33a87e2a4016a1962b032808197a7928ed15217eb3f.png",
+      "output": "page01.png",
+      "items": [
+        {
+          "type": "caption_box",
+          "box": [44, 44, 352, 160],
+          "text": "凌晨 2:13\n我家狗突然醒了。",
+          "font_size": 28
+        },
+        {
+          "type": "bubble",
+          "box": [650, 84, 836, 226],
+          "tail": [[684, 210], [652, 252], [706, 218]],
+          "text": "……",
+          "font_size": 30
+        },
+        {
+          "type": "bubble",
+          "box": [26, 648, 230, 774],
+          "tail": [[150, 760], [188, 822], [170, 760]],
+          "text": "你在让谁？",
+          "font_size": 27
+        },
+        {
+          "type": "bubble",
+          "box": [654, 1268, 836, 1410],
+          "tail": [[675, 1388], [642, 1428], [698, 1390]],
+          "text": "家里……\n有东西？",
+          "font_size": 24
+        }
+      ]
+    },
+    {
+      "image": "C:/Users/Administrator/.codex/generated_images/019e72f1-e77b-7c81-8e7c-a41320b69ca3/ig_01d67ca33a87e2a4016a19630d675881978428e10b7498f3bb.png",
+      "output": "page02.png",
+      "items": [
+        {
+          "type": "bubble",
+          "box": [20, 42, 245, 152],
+          "tail": [[218, 130], [275, 166], [242, 118]],
+          "text": "监控里，\n什么都没有。",
+          "font_size": 24
+        },
+        {
+          "type": "caption_box",
+          "box": [56, 540, 474, 598],
+          "text": "碗不是你推的。",
+          "font_size": 26
+        },
+        {
+          "type": "bubble",
+          "box": [110, 682, 386, 802],
+          "text": "咔——",
+          "font_size": 34
+        },
+        {
+          "type": "bubble",
+          "box": [632, 1258, 818, 1388],
+          "tail": [[660, 1362], [600, 1412], [678, 1370]],
+          "text": "汪。",
+          "font_size": 30
+        },
+        {
+          "type": "stroke_text",
+          "box": [510, 1480, 760, 1548],
+          "text": "翻译：别看。",
+          "font_size": 24,
+          "text_color": "#ffffff",
+          "text_stroke_color": "#000000",
+          "text_stroke_width": 3
+        }
+      ]
+    },
+    {
+      "image": "C:/Users/Administrator/.codex/generated_images/019e72f1-e77b-7c81-8e7c-a41320b69ca3/ig_01d67ca33a87e2a4016a19637027388197bbc0ad21732ea5f5.png",
+      "output": "page03.png",
+      "items": [
+        {
+          "type": "bubble",
+          "box": [66, 112, 244, 322],
+          "tail": [[228, 284], [286, 310], [246, 264]],
+          "text": "我只看了\n一眼。",
+          "font_size": 28
+        },
+        {
+          "type": "caption_box",
+          "box": [46, 515, 332, 580],
+          "text": "门口的队伍",
+          "font_size": 26
+        },
+        {
+          "type": "bubble",
+          "box": [538, 708, 728, 820],
+          "tail": [[586, 804], [546, 848], [614, 808]],
+          "text": "……",
+          "font_size": 28
+        },
+        {
+          "type": "bubble",
+          "box": [240, 1186, 420, 1310],
+          "tail": [[302, 1284], [346, 1344], [334, 1286]],
+          "text": "汪。",
+          "font_size": 28
+        },
+        {
+          "type": "caption_box",
+          "box": [468, 1560, 840, 1638],
+          "text": "你什么时候开始接待了？",
+          "font_size": 22
+        }
+      ]
+    },
+    {
+      "image": "C:/Users/Administrator/.codex/generated_images/019e72f1-e77b-7c81-8e7c-a41320b69ca3/ig_01d67ca33a87e2a4016a1963d381408197afa529ecde86cfcd.png",
+      "output": "page04.png",
+      "items": [
+        {
+          "type": "caption_box",
+          "box": [56, 54, 286, 134],
+          "text": "狗牌：保安",
+          "font_size": 26
+        },
+        {
+          "type": "bubble",
+          "box": [640, 110, 836, 236],
+          "tail": [[660, 214], [622, 256], [694, 220]],
+          "text": "下一位。",
+          "font_size": 27
+        },
+        {
+          "type": "caption_box",
+          "box": [42, 652, 232, 758],
+          "text": "这些是……\n报酬？",
+          "font_size": 25
+        },
+        {
+          "type": "bubble",
+          "box": [642, 750, 836, 876],
+          "tail": [[652, 840], [604, 898], [684, 850]],
+          "text": "汪！",
+          "font_size": 32
+        },
+        {
+          "type": "bubble",
+          "box": [44, 1242, 330, 1388],
+          "tail": [[160, 1366], [182, 1438], [196, 1368]],
+          "text": "我不收\n这种东西。",
+          "font_size": 28
+        },
+        {
+          "type": "bubble",
+          "box": [506, 1436, 610, 1528],
+          "text": "……",
+          "font_size": 22
+        }
+      ]
+    },
+    {
+      "image": "C:/Users/Administrator/.codex/generated_images/019e72f1-e77b-7c81-8e7c-a41320b69ca3/ig_01d67ca33a87e2a4016a19643155808197bbabc946350a7126.png",
+      "output": "page05.png",
+      "items": [
+        {
+          "type": "bubble",
+          "box": [646, 68, 836, 212],
+          "tail": [[656, 188], [622, 228], [686, 194]],
+          "text": "直到我看见\n最后一行。",
+          "font_size": 24
+        },
+        {
+          "type": "paper_text",
+          "box": [432, 346, 608, 504],
+          "text": "杨间\n凌晨 3:00\n到访",
+          "font_size": 28,
+          "text_color": "#641414"
+        },
+        {
+          "type": "paper_text",
+          "box": [392, 740, 632, 968],
+          "text": "杨间\n凌晨 3:00\n到访",
+          "font_size": 36,
+          "text_color": "#641414"
+        },
+        {
+          "type": "bubble",
+          "box": [78, 1264, 246, 1418],
+          "tail": [[206, 1386], [252, 1452], [222, 1388]],
+          "text": "我明明\n在家。",
+          "font_size": 26
+        },
+        {
+          "type": "bubble",
+          "box": [706, 1346, 834, 1458],
+          "tail": [[704, 1400], [666, 1412], [706, 1432]],
+          "text": "叮咚。",
+          "font_size": 26
+        },
+        {
+          "type": "caption_box",
+          "box": [66, 1584, 366, 1736],
+          "text": "下一话：\n谁才是主人？",
+          "font_size": 30
+        }
+      ]
+    }
+  ]
+}
